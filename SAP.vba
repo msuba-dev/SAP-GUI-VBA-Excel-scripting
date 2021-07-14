@@ -1,4 +1,4 @@
-'   version: 2020-11-18
+'   version: 2021-07-14
 '   Created by Miroslav Suba
 '   msuba@hpe.com
 
@@ -75,6 +75,8 @@ Public Type T_SAP_ObjectID
 End Type
 
 Public listAllSID() As T_SAP_ObjectID
+
+Public SAPSystemID As Long
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 '   SOME INTERNAL FUNCTIONS
@@ -971,6 +973,10 @@ End Function
 Function SAP_FormatUnconvertedFile(inputFileName As String, outpuFileName As String) As Boolean
     Dim I As Long
     Dim J As Long
+    Dim K As Long
+    
+    Dim concatLen As Long
+    Dim dataOffset As Long
     
     Dim fso As Object
     Dim inputFile As Object
@@ -1023,7 +1029,6 @@ Function SAP_FormatUnconvertedFile(inputFileName As String, outpuFileName As Str
     flagHeadersIdentified = False
 
     Do Until inputFile.AtEndOfStream
-        
         fileLine = inputFile.Readline
         
         s = Replace(fileLine, "-", "")
@@ -1068,9 +1073,9 @@ Function SAP_FormatUnconvertedFile(inputFileName As String, outpuFileName As Str
 
 ContinueWithData:
 
-        If fileLine <> vbCrLf Then
+        'If fileLine <> vbCrLf Then
             newLine = newLine & fileLine
-        End If
+        'End If
         
         'Pipe is an indicator of new column --> row has to either begin with pipe '|' or dash '-'
         'script removes dashes '-'
@@ -1089,6 +1094,10 @@ WriteHeader:
                     End If
                 Else
                     flagWrite = True
+                End If
+                
+                If noOfColumns > lastNoOfColumns Then
+                        flagWrite = flagWrite
                 End If
                 
                 'Check data consistency - is number of columns different than last one ?
@@ -1115,29 +1124,44 @@ WriteHeader:
 RestartLoop:
     
                         If UBound(wordTrim) > UBound(wordLen) Then
+        
+                            For I = LBound(wordTrim) + 1 To UBound(wordTrim) - 1
+                                If I < UBound(wordLen) Then
+                                    If Len(wordTrim(I)) <> wordLen(I) Then
+                                        concatLen = 0
+                                        K = 0
+                                        '
+                                        For J = I To UBound(wordTrim)
+                                            concatLen = concatLen + Len(wordTrim(J))
+                                            
+                                            K = K + 1
+                                            
+                                            If K > 1 Then
+                                                concatLen = concatLen + 1
+                                            End If
+                                            
+                                            If concatLen = wordLen(I) Then
+                                                Application.statusBar = "SAP_FormatUnconvertedFile: removing extra pipes '|'"
+                                                flagRemovePipes = True
+                                                
+                                                For K = I + 1 To J
+                                                    wordTrim(I) = wordTrim(I) & " " & wordTrim(K)
+                                                Next K
+                                                
+                                                dataOffset = J - I
+                                                
+                                                For K = I + 1 To UBound(wordTrim) - dataOffset
+                                                    wordTrim(K) = wordTrim(K + dataOffset)
+                                                Next K
     
-                        For I = LBound(wordTrim) + 1 To UBound(wordTrim) - 1
-                            If I < UBound(wordLen) Then
-                                If Len(wordTrim(I)) <> wordLen(I) Then
-                                    If Len(wordTrim(I)) + Len(wordTrim(I + 1)) + 1 = wordLen(I) Then
-                                        Application.statusBar = "SAP_FormatUnconvertedFile: removing extra pipes '|'"
-                                        flagRemovePipes = True
-                                        
-                                        'Replace Pipe with space
-                                        wordTrim(I) = wordTrim(I) & " " & wordTrim(I + 1)
-                                        
-                                        For J = I + 1 To UBound(wordTrim) - 1
-                                            wordTrim(J) = wordTrim(J + 1)
+                                                ReDim Preserve wordTrim(UBound(wordTrim) - dataOffset)
+                                                GoTo RestartLoop
+    
+                                            End If
                                         Next J
-                                        
-                                        ReDim Preserve wordTrim(UBound(wordTrim) - 1)
-                                        GoTo RestartLoop
-                                    Else
-                                        break
                                     End If
                                 End If
-                            End If
-                        Next I
+                            Next I
                         End If
 
                         'Check one more time - after pipe removal
@@ -1250,7 +1274,6 @@ End Function
 '   SAP_ExportToExcel Session, "EXPORT.XLS", ["C:\USERS\ME\DESKTOP"]
 '   SAP_ExportToExcel Session, "EXPORT.MHTML", ["C:\USERS\ME\DESKTOP"]
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-'TODO: set these as byval
 Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optional filePath As String = "", Optional keepOpened As Boolean = False) As Boolean
     Const fileFormat_Unconverted = 0
     Const fileFormat_XLS As Long = 1
@@ -1499,7 +1522,6 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
                 
                 'Change Sheet name by default to Sheet1
                 WB.ActiveSheet.Name = "Sheet1"
-                
                 WB.saveAs filePath & changeExtension(fileName, "XLSX"), fileFormat:=xlOpenXMLWorkbook
                 
                 'Delete temporary file
@@ -2224,14 +2246,19 @@ Function SAP_StartSQVI(vSession As Object, queryName As String) As Boolean
     
     vSession.StartTransaction ("SQVI")
     vSession.FindByID("wnd[0]/usr/ctxtRS38R-QNUM").Text = queryName
-    
-    'SQVI update - S4 button ID is      "wnd[0]/usr/btnP1"
-    '            - Fusion button ID is  "wnd[0]/tbar[1]/btn[8]"
-    SID = SAP_GetValidObjectID(vSession, Array("wnd[0]/tbar[1]/btn[8]", "wnd[0]/usr/btnP1"), "wnd[0]")
 
-    If SID <> "" Then
-        vSession.FindByID(SID).Press
+    'Small improvement - executing via menu is faster than searching for object IDs
+    If SAP.SAP_SelectMenu(vSession, "QuickView > Execute > Execute") Then
         SAP_StartSQVI = True
+    Else
+        'SQVI update - S4 button ID is      "wnd[0]/usr/btnP1"
+        '            - Fusion button ID is  "wnd[0]/tbar[1]/btn[8]"
+        SID = SAP_GetValidObjectID(vSession, Array("wnd[0]/tbar[1]/btn[8]", "wnd[0]/usr/btnP1"), "wnd[0]")
+    
+        If SID <> "" Then
+            vSession.FindByID(SID).Press
+            SAP_StartSQVI = True
+        End If
     End If
 End Function
 
@@ -2279,3 +2306,93 @@ Exit_Program:
     Set o = Nothing
     
 End Function
+
+'Function switches SAP ID based using SYSTEMID value
+'SwitchSystem(Array("SID 1", "SID 2", "SID 3", ...))
+'   --> returns SID 1 when SYSTEMID = 0
+'   --> returns SID 2 when SYSTEMID = 1
+'   --> returns SID 3 when SYSTEMID = 2
+
+Function SwitchSystem(v As Variant) As String
+    Dim I As Long
+    If IsArray(v) Then
+        For I = LBound(v) To UBound(v)
+            If I = SAPSystemID Then
+                SwitchSystem = v(I)
+                Exit Function
+            End If
+        Next I
+    End If
+    
+    SwitchSystem = CStr(v)
+End Function
+
+'Function selects date in date field (in Calendar)
+Function SAP_SelectDate(vSession As Object, ByVal SID As String, ByVal strDate As String) As Boolean
+    Dim I As Long
+
+    Dim DD As String
+    Dim MM As String
+    Dim YYYY As String
+
+    SAP_SelectDate = False
+    
+    DD = "": MM = "": YYYY = ""
+
+    'Convert strDate do YYYYMMDD format
+    '"20210802"
+    
+    'DD.MM.YYYY
+    If strDate Like "*.*.*" Then
+        I = InStr(strDate, ".")
+        If I > 0 Then
+            DD = Mid(strDate, 1, I - 1)
+            strDate = Mid(strDate, I + 1)
+        End If
+    
+        I = InStr(strDate, ".")
+        If I > 0 Then
+            MM = Mid(strDate, 1, I - 1)
+            strDate = Mid(strDate, I + 1)
+            
+            YYYY = strDate
+        End If
+        
+        strDate = YYYY & MM & DD
+    End If
+
+    'MM/DD/YYYY
+    If strDate Like "*/*/*" Then
+        I = InStr(strDate, "/")
+        If I > 0 Then
+            MM = Mid(strDate, 1, I - 1)
+            strDate = Mid(strDate, I + 1)
+        End If
+    
+        I = InStr(strDate, "/")
+        If I > 0 Then
+            DD = Mid(strDate, 1, I - 1)
+            strDate = Mid(strDate, I + 1)
+            
+            YYYY = strDate
+        End If
+        
+        strDate = YYYY & MM & DD
+    End If
+
+    'Set focus
+    vSession.FindByID(SID).SetFocus
+    
+    'Possible entries
+    vSession.FindByID("wnd[0]").SendVKey 4
+
+    SID = SAP.SAP_GetWindowID(vSession, 1)
+
+    If SID <> "" Then
+        vSession.FindByID("wnd[1]/usr/cntlCONTAINER/shellcont/shell").focusDate = strDate
+        vSession.FindByID("wnd[1]/usr/cntlCONTAINER/shellcont/shell").firstVisibleDate = "DAY_NAME"
+        vSession.FindByID("wnd[1]/tbar[0]/btn[0]").Press
+        SAP_SelectDate = True
+    End If
+End Function
+
