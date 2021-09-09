@@ -1,4 +1,4 @@
-'   version: 2021-07-14
+'   version: 2021-09-09
 '   Created by Miroslav Suba
 '   msuba@hpe.com
 
@@ -11,6 +11,8 @@ Public Const error_SAP_Logon_EntryNotFound = 1000
 Public Const fsForReading = 1
 Public Const fsForWriting = 2
 Public Const fsForAppending = 8
+
+Private Const moduleVersion = "Q3JlYXRlZCBieSBtc3ViYUBocGUuY29t"
 
 Private Type T_SAP_Client
     systemID As String
@@ -48,6 +50,8 @@ Public Type T_SAP_TreeColumn
 End Type
 
 Public Type T_SAP_Tree
+    SID As String
+
     columns() As T_SAP_TreeColumn
     listTreeNodes() As T_SAP_TreeNode
 End Type
@@ -519,6 +523,7 @@ Sub SAP_OpenConnection(vSession As Object, ByVal connectionName As String, Optio
     'Wait for window to appear
     Do
         Application.Wait (Now + TimeValue("00:00:01"))
+        DoEvents
     Loop While vSession.Info.Transaction <> "S000"
     
     'If username and password are specified - enter them
@@ -540,6 +545,7 @@ Sub SAP_OpenConnection(vSession As Object, ByVal connectionName As String, Optio
             End If
         End If
         
+        DoEvents
     Loop While UCase(Trim(vSession.Info.Transaction)) <> "SESSION_MANAGER"
     
     sessionWasLoggedByMacro = True
@@ -550,7 +556,7 @@ End Sub
 '   by specifying systemID you can connect to specific system (eg: R01, DCP). If not specified user will be prompted to select system manually
 '   by specifying sessionNo you can connect to specific session
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sessionNo As Long = 1)
+Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sessionNo As Long = -1)
     Dim I As Long
     
     Dim SID As String
@@ -608,9 +614,14 @@ Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sess
     ReDim listClients(listClientsCount)
     
     For I = 1 To listClientsCount
-        'SessionNo has to be converted to Integer
-        listClients(I).systemID = Trim(SAPApp.Children(CInt(I - 1)).Children(0).Info.SystemName)
-        listClients(I).userName = Trim(SAPApp.Children(CInt(I - 1)).Children(0).Info.user)
+        'We will ignore busy clients
+        If SAPApp.Children(CInt(I - 1)).Children(0).Busy = False Then
+            'SessionNo has to be converted to Integer
+            listClients(I).systemID = Trim(SAPApp.Children(CInt(I - 1)).Children(0).Info.SystemName)
+            listClients(I).userName = Trim(SAPApp.Children(CInt(I - 1)).Children(0).Info.user)
+        Else
+            listClients(I).systemID = "[session is busy]"
+        End If
     Next I
     
     'if scripting is not enabled - Info.User will not be available and will raise an error
@@ -667,6 +678,10 @@ Open_New_Connection:
                'User will have to enter
                 SAP_OpenConnection vSession, response
                 
+                If SAP_Activated(vSession, systemID) = False Then GoTo Exit_Program
+                
+                Set SAPConnection = vSession.Parent
+                
                 GoTo New_Connection_Opened
             End If
         End If
@@ -700,53 +715,55 @@ Open_New_Connection:
     
 'Detect Session no (we can create new session with this function)
 
+New_Connection_Opened:
+
     sessionsCount = SAPConnection.Children.Count
 
-    If sessionNo <> 1 Then
-        
-        'If Session_no = 0 then we will create a new Session
-        If sessionNo > 0 And sessionNo <= sessionsCount Then
-            response = sessionNo
-        Else
-            msg = "Session " & sessionNo & " not found." & Chr(10)
-            msg = msg & "Select Session, you would like to connect with:"
-            
-            For I = 1 To sessionsCount
-                If msg > "" Then
-                    msg = msg & Chr(10)
-                End If
-                
-                msg = msg & I & " - " & SAPConnection.Children(I - 1).Info.Transaction
-            Next I
-            
-            msg = msg & Chr(10)
-            msg = msg & SAPConnection.Children.Count + 1 & " - new Session"
-            
-            response = InputBox(msg, "SAP Initialization", "1")
-            response = getNumericValue(response)
+    'Not specified by user - connect to first session
+    If sessionNo = -1 Then
+        sessionNo = 1
+    Else
+        'Check if sessionNo is within boundaries (1 to number of sessions)
+        If sessionNo < 1 Then
+            sessionNo = 1
         End If
-        
-        'If no response from user then exit
-        If response = "" Then GoTo Exit_Program
-        
-        'Lets say that if user selected something which is obviously not within list of available Sessions he wants to create a new one ...
-        If response < 1 Then response = 1
-        
-        If response > sessionsCount Then response = sessionsCount + 1
-        
-        If response = "" Then
-            Call MsgBox("Wrong input !", vbCritical, "SAP Initialization Error")
-            GoTo Exit_Program
-        Else
-            'Create New Session
-            If response > sessionsCount Then
-                Set vSession = SAPConnection.Children(sessionsCount - 1)
-                vSession.CreateSession
-                
-                'Wait till new Session will be created
-                Do
-                    SID = SAP_GetWindowID(vSession, 1)
+    End If
 
+    'Check if session is busy - increase session number if it is
+    If sessionNo <= sessionsCount Then
+        For I = 1 To sessionsCount
+            If sessionNo = I Then
+                If SAPConnection.Children(I - 1).Busy Then
+                    sessionNo = sessionNo + 1
+                End If
+            End If
+        Next I
+    End If
+    
+    'Create New Session if needed
+    If sessionNo > sessionsCount Then
+        Dim sessionCreated As Boolean
+        
+        sessionCreated = False
+        
+        'Wait till new Session will be created
+        Do
+            'It is impossible to create new session if session from which we are creating it is busy - we still have to wait (nooooo ;-/)
+            If sessionCreated = False Then
+                'Try to create session - hopefully one of currently opened sessions is not busy
+                For I = 1 To sessionsCount
+                    Set vSession = SAPConnection.Children(I - 1)
+                    
+                    If vSession.Busy = False Then
+                        sessionCreated = True
+                        vSession.CreateSession
+                        Exit For
+                    End If
+                Next I
+            Else
+                If vSession.Busy = False Then
+                    SID = SAP_GetWindowID(vSession, 1)
+        
                     If SID <> "" Then
                         If vSession.FindByID(SID).Text = "Information" Then
                             If vSession.FindByID("wnd[1]/usr/txtMESSTXT1").Text = "Maximum number of sessions reached" Then
@@ -758,21 +775,33 @@ Open_New_Connection:
                     End If
                     
                     Application.Wait (Now + DateValue("00:00:01"))
-                Loop While SAPConnection.Children.Count < sessionsCount + 1
-                
-                sessionNo = SAPConnection.Children.Count
-            Else
-                sessionNo = response
+                End If
             End If
-        End If
+            
+            DoEvents
+        Loop While SAPConnection.Children.Count < sessionsCount + 1
+        
+        'When new session is created - it is busy for a moment - wait while it is busy - we don't need any warnings (below)
+        sessionNo = SAPConnection.Children.Count
+        Set vSession = SAPConnection.Children(sessionNo - 1)
+        
+        While vSession.Busy
+            DoEvents
+        Wend
+        
+        'Try again to connect to specified session
+        '(user might have created new session manually)
+        GoTo New_Connection_Opened
     End If
 
     Err.Clear
     
     Set vSession = SAPConnection.Children(sessionNo - 1)
-    
-New_Connection_Opened:
 
+    If vSession.Busy Then
+        MsgBox "Session is currently busy.", vbInformation, "SAP Initialization"
+    End If
+    
     If SAP_Activated(vSession, systemID) = False Then GoTo Exit_Program
 
     If invalidObject(vSession, "Error while initializing Session " & sessionNo) Then GoTo Error_Handler
@@ -2125,18 +2154,28 @@ Function SAP_TreeLoadStructure(vSession As Object, ByVal vTreeStructureSID As St
     vTreeStructure.listTreeNodes(0).nodeKey = ""
     vTreeStructure.listTreeNodes(0).nodePath = ""
     vTreeStructure.listTreeNodes(0).nodeItems = Null
+
+    vTreeStructure.SID = vTreeStructureSID
     
     'Get column names
     Set o = vSession.FindByID(vTreeStructureSID).GetColumnNames
     
-    ReDim vTreeStructure.columns(0): vTreeStructure.columns(0).columnName = ""
+    ReDim vTreeStructure.columns(o.length)
     
     For I = 0 To o.length - 1
         If CStr(o(I)) <> "" Then
-            If vTreeStructure.columns(UBound(vTreeStructure.columns)).columnName <> "" Then ReDim Preserve vTreeStructure.columns(UBound(vTreeStructure.columns) + 1)
-            
-            vTreeStructure.columns(UBound(vTreeStructure.columns)).columnName = CStr(o(I))
-            vTreeStructure.columns(UBound(vTreeStructure.columns)).columnTitle = vSession.FindByID(vTreeStructureSID).GetColumnTitleFromName(vTreeStructure.columns(UBound(vTreeStructure.columns)).columnName)
+            vTreeStructure.columns(I).columnName = CStr(o(I))
+        End If
+    Next I
+    
+    Set o = Nothing
+
+    'Get column titles
+    Set o = vSession.FindByID(vTreeStructureSID).GetColumnTitles
+    
+    For I = 0 To o.length - 1
+        If CStr(o(I)) <> "" Then
+            vTreeStructure.columns(I).columnTitle = CStr(o(I))
         End If
     Next I
     
@@ -2396,3 +2435,52 @@ Function SAP_SelectDate(vSession As Object, ByVal SID As String, ByVal strDate A
     End If
 End Function
 
+'Function returns SAP ID of active tab for GuiTabStrip
+'Input SID - SID of GuiTabStrip object
+Function SAP_GetActiveTabSID(vSession As Object, SID As String) As String
+    Dim o As Object
+
+    SAP_GetActiveTabSID = ""
+
+    If SID = "" Then Exit Function
+
+    If Trim(vSession.FindByID(SID).Type) <> "GuiTabStrip" Then Exit Function
+
+    'Loop through all tabs
+    For Each o In vSession.FindByID(SID).Children
+        'If object has any children - then it is most likely active tab
+        'TODO: is this reliable ?
+        If o.Children.length > 0 Then
+            SAP_GetActiveTabSID = o.ID
+            Exit For
+        End If
+    Next o
+
+    Set o = Nothing
+End Function
+
+'Function selects tab by name in GuiTabStrip
+'Input SID - SID of GuiTabStrip object
+Function SAP_SelectTab(vSession As Object, SID As String, tabName As String) As Boolean
+    Dim o As Object
+
+    SAP_SelectTab = False
+                
+    If SID = "" Then Exit Function
+                
+    If Trim(vSession.FindByID(SID).Type) <> "GuiTabStrip" Then Exit Function
+                
+    'Loop through all tabs
+    For Each o In vSession.FindByID(SID).Children
+        'Check tab name
+        If o.Text = tabName Then
+            'Select tab
+            o.Select
+            
+            SAP_SelectTab = True
+            Exit For
+        End If
+    Next o
+    
+    Set o = Nothing
+End Function
