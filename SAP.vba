@@ -1,11 +1,32 @@
-'   version: 2021-09-09
+'   version: 2023-08-25
 '   Created by Miroslav Suba
 '   msuba@hpe.com
+'
+'   GitHub repository - check for updates
+'   https://github.com/msuba-dev/SAP-GUI-VBA-Excel-scripting
 
 Option Explicit
 Option Private Module
 
+'Disconnected - try to log back in
 Public Const error_SAP_Disconnected = -2147417848
+
+'Automation error The server threw an expection (occurs ususally when connection drops)
+Public Const error_SAP_AutomationError = -2147417851
+
+'The remote procedure failed (occurs ususally when SAP Logon launchpad crashes)
+Public Const error_SAP_RemoteProcedureFailed = -2147023170
+
+'The remote server machine does not exist or is unavailable (occurs ususally when SAP Logon launchpad crashes)
+Public Const error_SAP_RemoteServerMachineDoesNotExist = 462
+
+'The 'Sapgui Component' could not be instantiated. (occurs when SAP is down)
+Public Const error_SAP_GUICouldNotBeInstantiated = 605
+
+'Control could not be found by id. (occurs when SAP is disconnected)
+Public Const error_SAP_ControlNotFoundByID = 619
+
+'Logon entry not found
 Public Const error_SAP_Logon_EntryNotFound = 1000
 
 Public Const fsForReading = 1
@@ -14,8 +35,14 @@ Public Const fsForAppending = 8
 
 Private Const moduleVersion = "Q3JlYXRlZCBieSBtc3ViYUBocGUuY29t"
 
+Private Type T_SAP_TreeItemQuery
+    listIndex As Long
+    columnValue As String
+    flagFound As Boolean
+End Type
+
 Private Type T_SAP_Client
-    systemID As String
+    systemName As String
     userName As String
 End Type
 
@@ -23,6 +50,7 @@ Public SAPRot As Object
 Public SAPGUIAuto As Object
 Public SAPApp As Object
 Public SAPConnection As Object
+Public SAPSystemName As String
 
 Public filePathSaveAs As String
 Public sessionWasLoggedByMacro As Boolean
@@ -51,6 +79,7 @@ End Type
 
 Public Type T_SAP_Tree
     SID As String
+    selectedNodeKey As String
 
     columns() As T_SAP_TreeColumn
     listTreeNodes() As T_SAP_TreeNode
@@ -80,7 +109,11 @@ End Type
 
 Public listAllSID() As T_SAP_ObjectID
 
+'
 Public SAPSystemID As Long
+
+'
+Private listFieldInfo() As Variant
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 '   SOME INTERNAL FUNCTIONS
@@ -97,30 +130,30 @@ Private Sub FSO_DeleteFile(fileName As String)
     End If
 End Sub
 
-Private Function formatAsFolderPath(ByVal folderPath As String) As String
+Private Function FormatAsFolderPath(ByVal folderPath As String) As String
     folderPath = Trim(folderPath)
     
     If Right(folderPath, 1) <> "\" Then folderPath = folderPath & "\"
     
-    formatAsFolderPath = folderPath
+    FormatAsFolderPath = folderPath
 End Function
 
-Private Function getFileExtension(ByVal fileName As String) As String
+Private Function GetFileExtension(ByVal fileName As String) As String
     Dim I As Long
     
-    getFileExtension = ""
+    GetFileExtension = ""
     
     If InStr(fileName, ".") > 0 Then
         For I = Len(fileName) To 1 Step -1
             If Mid(fileName, I, 1) = "." Then
-                getFileExtension = Mid(fileName, I + 1, Len(fileName))
+                GetFileExtension = Mid(fileName, I + 1, Len(fileName))
                 Exit Function
             End If
         Next I
     End If
 End Function
 
-Function changeExtension(ByVal fileName As String, fileExtension As String)
+Function ChangeExtension(ByVal fileName As String, fileExtension As String)
     Dim I As Long
     
     If InStr(fileName, ".") > 0 Then
@@ -132,7 +165,7 @@ Function changeExtension(ByVal fileName As String, fileExtension As String)
         Next I
     End If
 
-    changeExtension = fileName & "." & fileExtension
+    ChangeExtension = fileName & "." & fileExtension
 End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -163,11 +196,11 @@ End Function
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 '   Function will check if object o is nothing, if yes - it will display errorMsg
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Private Function invalidObject(ByVal o As Object, ByVal errorMsg As String) As Boolean
-    invalidObject = False
+Private Function IsObjectInvalid(ByVal o As Object, ByVal errorMsg As String) As Boolean
+    IsObjectInvalid = False
     
     If o Is Nothing Then
-        invalidObject = True
+        IsObjectInvalid = True
         MsgBox errorMsg, vbCritical, "SAP Initialization Error"
     End If
 End Function
@@ -175,7 +208,7 @@ End Function
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 '   Function will check if v is numeric value, returns vbNullString if not, otherwise v converted to number
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Private Function getNumericValue(ByVal v As Variant) As Variant
+Private Function GetNumericValue(ByVal v As Variant) As Variant
     'Convert to string, remove extra spaces
     v = CStr(v)
     v = Trim(v)
@@ -186,7 +219,7 @@ Private Function getNumericValue(ByVal v As Variant) As Variant
         v = vbNullString
     End If
     
-    getNumericValue = v
+    GetNumericValue = v
 End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -229,7 +262,7 @@ End Function
 '       1\2\1 --> 1\3
 '       and so on ...
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Function getNextNodePathParent(ByVal nodePath As String) As String
+Function GetNextNodePathParent(ByVal nodePath As String) As String
     Dim I As Long
 
     Dim nodeList() As String
@@ -246,12 +279,12 @@ Function getNextNodePathParent(ByVal nodePath As String) As String
                 nodePathNew = nodePathNew & nodeList(I)
             Next I
             
-            getNextNodePathParent = nodePathNew & "\" & Val(nodeList(UBound(nodeList) - 1)) + 1
+            GetNextNodePathParent = nodePathNew & "\" & Val(nodeList(UBound(nodeList) - 1)) + 1
         Else
-            getNextNodePathParent = Val(nodeList(UBound(nodeList) - 1)) + 1
+            GetNextNodePathParent = Val(nodeList(UBound(nodeList) - 1)) + 1
         End If
     Else
-        getNextNodePathParent = Val(nodePath) + 1
+        GetNextNodePathParent = Val(nodePath) + 1
     End If
     
     Erase nodeList
@@ -263,7 +296,7 @@ End Function
 '       1\2\1 --> 1\2\2
 '       and so on ...
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Function getNextNodePath(ByVal nodePath As String) As String
+Function GetNextNodePath(ByVal nodePath As String) As String
     Dim I As Long
     Dim nodeList() As String
     Dim nodePathNew As String
@@ -279,9 +312,9 @@ Function getNextNodePath(ByVal nodePath As String) As String
             nodePathNew = nodePathNew & nodeList(I)
         Next I
         
-        getNextNodePath = nodePathNew & "\" & Val(nodeList(UBound(nodeList))) + 1
+        GetNextNodePath = nodePathNew & "\" & Val(nodeList(UBound(nodeList))) + 1
     Else
-        getNextNodePath = Val(nodePath) + 1
+        GetNextNodePath = Val(nodePath) + 1
     End If
     
     Erase nodeList
@@ -367,8 +400,25 @@ Function SAP_GetSIDCol(ByVal SID As String) As Long
             SID = Mid(SID, 1, I - 1)
     
             If IsNumeric(SID) Then SAP_GetSIDCol = Val(SID)
+            Exit Function
         End If
     End If
+    
+    For I = Len(SID) To 1 Step -1
+        If Mid(SID, I, 1) = "[" Then
+            SID = Mid(SID, I + 1)
+            
+            I = InStr(SID, ",")
+            
+            If I > 0 Then
+                SID = Mid(SID, 1, I - 1)
+        
+                If IsNumeric(SID) Then SAP_GetSIDCol = Val(SID)
+                
+                Exit Function
+            End If
+        End If
+    Next I
 End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -398,7 +448,7 @@ Sub SAP_SetFilePathSaveAs(Optional ByVal filePath As String = "")
         filePathSaveAs = filePath
     End If
     
-    filePathSaveAs = formatAsFolderPath(filePathSaveAs)
+    filePathSaveAs = FormatAsFolderPath(filePathSaveAs)
 End Sub
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -472,16 +522,46 @@ Function SAP_GetSessionNoByTCode(vSession As Object, tCode As String) As Long
     End Select
     
     'Init SAP if not done already
-    If SAPConnection Is Nothing Then SAP_Init vSession
+    If SAPConnection Is Nothing Then SAP_Init vSession, selectEmptySession:=False
     
-    If invalidObject(SAPConnection, "Error while initializing object SAPApp.Children() of GetScriptingEngine") = False Then
+    If IsObjectInvalid(SAPConnection, "Error while initializing object SAPApp.Children() of GetScriptingEngine") = False Then
         For I = 1 To SAPConnection.Children.Count
-            'SessionNo has to be converted to Integer
-            Set vSession = SAPConnection.Children(CInt(I - 1))
-            
-            If UCase(Trim(vSession.Info.Transaction)) = tCode Then
-                SAP_GetSessionNoByTCode = I
-                Exit Function
+            If SAPConnection.Children(CInt(I - 1)).Busy = False Then
+                'SessionNo has to be converted to Integer
+                Set vSession = SAPConnection.Children(CInt(I - 1))
+                
+                If UCase(Trim(vSession.Info.Transaction)) = tCode Then
+                    SAP_GetSessionNoByTCode = I
+                    Exit Function
+                End If
+            End If
+        Next I
+    End If
+End Function
+
+'---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+'   Will get the number of Session, where tCode is active, if there is no such session -1 value will be returned
+'---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Function SAP_GetSessionNoByProgramName(vSession As Object, programName As String) As Long
+    Dim I As Long
+    
+    SAP_GetSessionNoByProgramName = -1
+    
+    programName = UCase(Trim(programName))
+    
+    'Init SAP if not done already
+    If SAPConnection Is Nothing Then SAP_Init vSession, selectEmptySession:=False
+    
+    If IsObjectInvalid(SAPConnection, "Error while initializing object SAPApp.Children() of GetScriptingEngine") = False Then
+        For I = 1 To SAPConnection.Children.Count
+            If SAPConnection.Children(CInt(I - 1)).Busy = False Then
+                'SessionNo has to be converted to Integer
+                Set vSession = SAPConnection.Children(CInt(I - 1))
+                
+                If UCase(Trim(vSession.Info.Program)) = programName Then
+                    SAP_GetSessionNoByProgramName = I
+                    Exit Function
+                End If
             End If
         Next I
     End If
@@ -491,9 +571,12 @@ End Function
 '   Will log in to SAP session via specified connectionName, with specified userName and password
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Sub SAP_OpenConnection(vSession As Object, ByVal connectionName As String, Optional userName As String = "", Optional password As String = "", Optional synchronousMode As Boolean = True)
-    Dim flagSAPLogonEntryNotFound As Boolean
-    
-    flagSAPLogonEntryNotFound = False
+    Dim response As Variant
+    Dim flagCriticalError As Boolean
+
+TryAgain:
+
+    flagCriticalError = False
     
     Set SAPGUIAuto = GetObject("SAPGUI")
     'Set SAPGUIAuto = CreateObject("SAPGUI")
@@ -505,16 +588,23 @@ Sub SAP_OpenConnection(vSession As Object, ByVal connectionName As String, Optio
     
     Set SAPConnection = SAPApp.OpenConnection(connectionName, synchronousMode)
     
+    If Err.Number = error_SAP_GUICouldNotBeInstantiated Then
+        flagCriticalError = True
+        response = MsgBox(connectionName & " connection could not be instantiated." & Chr(10) & "SAP is probably down." & Chr(10) & "Do you want to try again?", vbCritical + vbYesNo, "SAP open connection")
+        
+        If response = vbYes Then GoTo TryAgain
+    End If
+    
     If Err.Number = error_SAP_Logon_EntryNotFound Then
-        flagSAPLogonEntryNotFound = True
-        MsgBox "SAP Logon connection entry not found " & connectionName, vbExclamation
+        flagCriticalError = True
+        MsgBox "SAP Logon connection entry not found " & connectionName, vbCritical, "SAP open connection"
     End If
 
     If Err.Number <> 0 Then Err.Clear
     
     On Error GoTo -1
     
-    If flagSAPLogonEntryNotFound Then Exit Sub
+    If flagCriticalError Then Exit Sub
 
 '---
     
@@ -553,12 +643,14 @@ End Sub
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 '   Method will connect vSession object to SAP session
-'   by specifying systemID you can connect to specific system (eg: R01, DCP). If not specified user will be prompted to select system manually
+'   by specifying systemName you can connect to specific system (eg: R01, DCP). If not specified user will be prompted to select system manually
 '   by specifying sessionNo you can connect to specific session
+'   by default function will try to connect to empty session (with SESSION_MANAGER)
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sessionNo As Long = -1)
+Sub SAP_Init(vSession As Object, Optional systemName As String = "", Optional sessionNo As Long = -1, Optional selectEmptySession As Boolean = True)
     Dim I As Long
-    
+    Dim J As Long
+
     Dim SID As String
     
     Dim listClients() As T_SAP_Client
@@ -566,11 +658,23 @@ Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sess
     
     Dim sessionsCount As Long
     
+    Dim hndw As String
+    Dim flagNewHandle As Boolean
+    
+    Dim listHandles() As String
+    
     Dim title As String
     Dim msg As String
     Dim response As Variant
 
+    Dim isBusy As Boolean
     Dim defaultClient As String
+
+    Dim sessionCreated As Boolean
+    
+'--
+
+TryAgain_Disconnected:
 
     SAP_Destroy vSession
     
@@ -589,11 +693,11 @@ Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sess
     If SAPGUIAuto Is Nothing Then
         Set SAPGUIAuto = GetObject("SAPGUI")
         
-        If invalidObject(SAPGUIAuto, "Error while initializing object SAPGUI." & Chr(10) & "Please make sure SAP Logon Launchpad is running.") Then GoTo Error_Handler
+        If IsObjectInvalid(SAPGUIAuto, "Error while initializing object SAPGUI." & Chr(10) & "Please make sure SAP Logon Launchpad is running.") Then GoTo Error_Handler
     End If
     
     Set SAPApp = SAPGUIAuto.GetScriptingEngine()
-    If invalidObject(SAPApp, "Error while initializing object GetScriptingEngine of SAPGUI.") Then GoTo Error_Handler
+    If IsObjectInvalid(SAPApp, "Error while initializing object GetScriptingEngine of SAPGUI.") Then GoTo Error_Handler
     
 'Detect Clients
     
@@ -602,8 +706,8 @@ Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sess
     If listClientsCount = 0 Then
         title = "SAP Initialization Error"
         
-        If systemID <> "" Then
-            title = title & " (" & systemID & ")"
+        If systemName <> "" Then
+            title = title & " (" & systemName & ")"
         End If
 
         response = MsgBox("You are not logged in." & Chr(10) & "Do you want to log in now?", vbCritical + vbYesNo, title)
@@ -614,13 +718,21 @@ Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sess
     ReDim listClients(listClientsCount)
     
     For I = 1 To listClientsCount
+        isBusy = True
+        
         'We will ignore busy clients
-        If SAPApp.Children(CInt(I - 1)).Children(0).Busy = False Then
-            'SessionNo has to be converted to Integer
-            listClients(I).systemID = Trim(SAPApp.Children(CInt(I - 1)).Children(0).Info.SystemName)
-            listClients(I).userName = Trim(SAPApp.Children(CInt(I - 1)).Children(0).Info.user)
-        Else
-            listClients(I).systemID = "[session is busy]"
+        For J = 0 To SAPApp.Children(CInt(I - 1)).Children.Count - 1
+            If SAPApp.Children(CInt(I - 1)).Children(CInt(J)).Busy = False Then
+                'SessionNo has to be converted to Integer
+                listClients(I).systemName = Trim(SAPApp.Children(CInt(I - 1)).Children(CInt(J)).Info.systemName)
+                listClients(I).userName = Trim(SAPApp.Children(CInt(I - 1)).Children(CInt(J)).Info.user)
+                isBusy = False
+                Exit For
+            End If
+        Next J
+        
+        If isBusy Then
+            listClients(I).systemName = "[session is busy]"
         End If
     Next I
     
@@ -632,16 +744,16 @@ Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sess
     defaultClient = "1"
     
     'If user specified to which Client he wants to connect with
-    If systemID <> "" Then
+    If systemName <> "" Then
         For I = 0 To listClientsCount
-            If listClients(I).systemID Like systemID Then
+            If listClients(I).systemName Like systemName Then
                 response = I
                 Exit For
             End If
         Next I
         
         If response = "" Then
-            msg = "Client " & systemID & " not detected." & Chr(10)
+            msg = "Client " & systemName & " not detected." & Chr(10)
             defaultClient = "+"
         End If
     End If
@@ -660,7 +772,7 @@ Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sess
         
         'Create a list of clients
         For I = 1 To listClientsCount
-            msg = msg & Chr(10) & I & " - " & listClients(I).systemID & " " & listClients(I).userName
+            msg = msg & Chr(10) & I & " - " & listClients(I).systemName & " " & listClients(I).userName
         Next I
         
         msg = msg & Chr(10) & "+ - to open new connection."
@@ -672,13 +784,13 @@ Sub SAP_Init(vSession As Object, Optional systemID As String = "", Optional sess
         
 Open_New_Connection:
         
-            response = InputBox("Please enter Logon entry name:", "SAP Logon connection entry", systemID)
+            response = InputBox("Please enter Logon entry name:", "SAP Logon connection entry", systemName)
             
             If response <> "" Then
                'User will have to enter
                 SAP_OpenConnection vSession, response
                 
-                If SAP_Activated(vSession, systemID) = False Then GoTo Exit_Program
+                If SAP_Activated(vSession, systemName) = False Then GoTo Exit_Program
                 
                 Set SAPConnection = vSession.Parent
                 
@@ -686,27 +798,27 @@ Open_New_Connection:
             End If
         End If
         
-        response = getNumericValue(response)
+        response = GetNumericValue(response)
                 
         If response = "" Then GoTo Exit_Program
         
         'Wrong input ?
         If (response < 1) Or (response > listClientsCount) Then
             response = ""
-            Call MsgBox("Wrong input !", vbCritical, "SAP Initialization Error")
+            MsgBox "Wrong input !", vbCritical, "SAP Initialization Error"
         End If
     Else
         'And of course, if there is one client available, we will connect to that one
         If response = "" Then response = 1
     End If
         
-    Set SAPConnection = SAPApp.Children(response - 1)
+    Set SAPConnection = SAPApp.Children(CInt(response - 1))
     
-    If invalidObject(SAPConnection, "Error while initializing object SAPApp.Children() of GetScriptingEngine") Then GoTo Error_Handler
+    If IsObjectInvalid(SAPConnection, "Error while initializing object SAPApp.Children() of GetScriptingEngine") Then GoTo Error_Handler
     
-    If SAPConnection.DisabledByServer = True Then
-        Call MsgBox("Scripting support has not been enabled for the application server." & Chr(10) & _
-                    Trim(SAPConnection.connectionstring), vbCritical, "SAP Initialization error")
+    If SAPConnection.DisabledByServer Then
+        MsgBox "Scripting support has not been enabled for the application server." & Chr(10) & _
+                    Trim(SAPConnection.connectionstring), vbCritical, "SAP Initialization error"
                     
         GoTo Exit_Program
     End If
@@ -716,7 +828,9 @@ Open_New_Connection:
 'Detect Session no (we can create new session with this function)
 
 New_Connection_Opened:
-
+    
+    ReDim listHandles(0): listHandles(0) = ""
+    
     sessionsCount = SAPConnection.Children.Count
 
     'Not specified by user - connect to first session
@@ -732,9 +846,21 @@ New_Connection_Opened:
     'Check if session is busy - increase session number if it is
     If sessionNo <= sessionsCount Then
         For I = 1 To sessionsCount
+            'Keep track of currently opened session window handles
+            If SAPConnection.Children(CInt(I - 1)).Busy = False Then
+                If listHandles(0) <> "" Then ReDim Preserve listHandles(UBound(listHandles) + 1)
+                listHandles(UBound(listHandles)) = SAPConnection.Children(CInt(I - 1)).ActiveWindow.Handle
+            End If
+
             If sessionNo = I Then
-                If SAPConnection.Children(I - 1).Busy Then
+                If SAPConnection.Children(CInt(I - 1)).Busy Then
                     sessionNo = sessionNo + 1
+                Else
+                    If selectEmptySession Then
+                        If SAPConnection.Children(CInt(I - 1)).Info.Transaction <> "SESSION_MANAGER" Then
+                            sessionNo = sessionNo + 1
+                        End If
+                    End If
                 End If
             End If
         Next I
@@ -742,8 +868,6 @@ New_Connection_Opened:
     
     'Create New Session if needed
     If sessionNo > sessionsCount Then
-        Dim sessionCreated As Boolean
-        
         sessionCreated = False
         
         'Wait till new Session will be created
@@ -751,15 +875,31 @@ New_Connection_Opened:
             'It is impossible to create new session if session from which we are creating it is busy - we still have to wait (nooooo ;-/)
             If sessionCreated = False Then
                 'Try to create session - hopefully one of currently opened sessions is not busy
+                '(otherwise we have to wait for user to do it manually)
+                isBusy = True
+                
                 For I = 1 To sessionsCount
-                    Set vSession = SAPConnection.Children(I - 1)
+                    Set vSession = SAPConnection.Children(CInt(I - 1))
                     
                     If vSession.Busy = False Then
+                        isBusy = False
                         sessionCreated = True
+                        
+                        'List of Children changes when new session is created - list is sorted by hndw!
                         vSession.CreateSession
+                        
+                        While vSession.Busy
+                            DoEvents
+                        Wend
+
                         Exit For
                     End If
                 Next I
+                
+                If isBusy Then
+                    'Let user know that all SAP sessions are currently busy!
+                    Application.StatusBar = "SAP_Init: all sessions are currently busy! (... you can create new session manually)"
+                End If
             Else
                 If vSession.Busy = False Then
                     SID = SAP_GetWindowID(vSession, 1)
@@ -773,38 +913,66 @@ New_Connection_Opened:
                             End If
                         End If
                     End If
-                    
-                    Application.Wait (Now + DateValue("00:00:01"))
                 End If
             End If
             
+            '-- Check if we have new window available
+            
+            'Update variables
+            sessionsCount = SAPConnection.Children.Count
+            sessionNo = sessionsCount
+            
+            For I = 1 To sessionsCount
+                'Only if not busy
+                If SAPConnection.Children(CInt(I - 1)).Busy = False Then
+                    
+                    flagNewHandle = True
+                    
+                    'Get window handle
+                    hndw = SAPConnection.Children(CInt(I - 1)).ActiveWindow.Handle
+                    
+                    'Check which session window is new
+                    For J = LBound(listHandles) To UBound(listHandles)
+                        If listHandles(J) = hndw Then
+                            flagNewHandle = False
+                            Exit For
+                        End If
+                    Next J
+                    
+                    If flagNewHandle Then
+                        sessionNo = I
+                        Set vSession = SAPConnection.Children(CInt(I - 1))
+                        Exit For
+                    End If
+                End If
+            Next I
+            
+            If sessionsCount = 0 Then
+                'SAP crashed while we tried to create new session ...
+                'MsgBox "booom"
+                GoTo TryAgain_Disconnected
+            End If
+            
             DoEvents
-        Loop While SAPConnection.Children.Count < sessionsCount + 1
-        
-        'When new session is created - it is busy for a moment - wait while it is busy - we don't need any warnings (below)
-        sessionNo = SAPConnection.Children.Count
-        Set vSession = SAPConnection.Children(sessionNo - 1)
-        
-        While vSession.Busy
-            DoEvents
-        Wend
-        
-        'Try again to connect to specified session
-        '(user might have created new session manually)
-        GoTo New_Connection_Opened
+        Loop While flagNewHandle = False
+    Else
+        Set vSession = SAPConnection.Children(CInt(sessionNo - 1))
     End If
 
     Err.Clear
     
-    Set vSession = SAPConnection.Children(sessionNo - 1)
-
     If vSession.Busy Then
-        MsgBox "Session is currently busy.", vbInformation, "SAP Initialization"
+        response = MsgBox("Session is currently busy - do you want to open new one?", vbYesNo, "SAP Initialization")
+        If response = vbYes Then
+            sessionNo = SAPConnection.Children.Count + 1
+            GoTo New_Connection_Opened
+        End If
     End If
-    
-    If SAP_Activated(vSession, systemID) = False Then GoTo Exit_Program
 
-    If invalidObject(vSession, "Error while initializing Session " & sessionNo) Then GoTo Error_Handler
+    'SAPSystemName will be updated by SAP_Activated
+    If SAP_Activated(vSession, systemName) = False Then GoTo Exit_Program
+
+    If IsObjectInvalid(vSession, "Error while initializing Session " & sessionNo) Then GoTo Error_Handler
     
     If vSession.Info.ScriptingModeReadOnly Then
         MsgBox "Server application has Scripting Mode set to READ ONLY. You will not be able to manipulate SAP objects !", vbCritical, "SAP Initialization Warning"
@@ -826,60 +994,124 @@ Error_Handler:
                 
         Err.Clear
     Else
-        If invalidObject(vSession, "Unknown error - Connection to SAP failed ...") = False Then
+        If IsObjectInvalid(vSession, "Unknown error - Connection to SAP failed ...") = False Then
             '
         End If
     End If
 
 Exit_Program:
     
+    Erase listHandles
     Erase listClients
-
 End Sub
+
+'---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+'   Function should allow better error handling - specifically with SAP disconnection issues
+'---------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Function SAP_HandleDisconnection(vSession As Object) As Boolean
+    SAP_HandleDisconnection = False
+    
+    If Err.Number = 0 Then Exit Function
+    
+    'Automation error The server threw an expection (occurs ususally when connection drops)
+    If Err.Number = error_SAP_AutomationError Then
+        Err.Clear
+        Application.StatusBar = "SAP error: Automation error The server threw an expection. (occurs ususally when connection drops)"
+    
+        MsgBox "SAP session disconnected. Please log back to SAP.", vbCritical, "SAP Handle Disconnection"
+        SAP_Init vSession, SAPSystemName
+        SAP_HandleDisconnection = True
+    End If
+    
+    'The remote server machine does not exist or is unavailable (occurs ususally when SAP Logon launchpad crashes)
+    If Err.Number = error_SAP_RemoteServerMachineDoesNotExist Then
+        Err.Clear
+        Application.StatusBar = "SAP error: The remote server machine does not exist or is unavailable (occurs ususally when SAP Logon launchpad crashes)"
+    
+        MsgBox "SAP session disconnected. Please log back to SAP.", vbCritical, "SAP Handle Disconnection"
+        SAP_Init vSession, SAPSystemName
+        SAP_HandleDisconnection = True
+    End If
+
+    'The remote procedure failed (occurs ususally when SAP Logon launchpad crashes completely)
+    If Err.Number = error_SAP_RemoteProcedureFailed Then
+        Err.Clear
+        Application.StatusBar = "SAP error: The remote procedure failed. (occurs ususally when SAP Logon launchpad crashes)"
+    
+        MsgBox "SAP session disconnected. Please log back to SAP.", vbCritical, "SAP Handle Disconnection"
+        SAP_Init vSession, SAPSystemName
+        SAP_HandleDisconnection = True
+    End If
+
+    'Control could not be found by id. (occurs when SAP is disconnected)
+    If Err.Number = error_SAP_ControlNotFoundByID Then
+        Err.Clear
+        Application.StatusBar = "SAP error: Control could not be found by ID. (occurs ususally when SAP disconnects)"
+    
+        MsgBox "Either SAP got disconnected or the object ID was not found.", vbCritical, "SAP Handle Disconnection"
+        SAP_Init vSession, SAPSystemName
+        SAP_HandleDisconnection = True
+    End If
+    
+    'Disconnected - try to log back in
+    If Err.Number = error_SAP_Disconnected Then
+        Err.Clear
+        Application.StatusBar = "SAP error: session was disconnected."
+
+        SAP_Init vSession, SAPSystemName
+        SAP_HandleDisconnection = True
+    End If
+
+    If Err.Number <> 0 Then
+        Application.StatusBar = "SAP_HandleDisconnection: Unexpected error: " & Err.Number & " " & Err.Description
+        
+        DoEvents
+        
+        'TODO: testing error handling - remove afterwards
+        MsgBox "Well ... something went wrong :)" & Chr(10) & Err.Number & " " & Chr(10) & Err.Description
+    End If
+    
+    'Safety check (allows Ctrl + PauseBreak to interrupt code execution in case of infinite loop)
+    Application.StatusBar = False
+    DoEvents
+End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 '   Function will 'check' if Session is active
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Function SAP_Activated(vSession As Object, Optional systemID As String = "", Optional tCode As String = "") As Boolean
-    Dim o As Object
-    
-    Dim isActive As Boolean
-    Dim response As Variant
-    
-    Dim backupTestToolMode As Long
-
+Function SAP_Activated(vSession As Object, Optional systemName As String = "", Optional tCode As String = "") As Boolean
     SAP_Activated = False
     
+    'Basic checks
     If vSession Is Nothing Then Exit Function
+    
+    'Internal variable
     If SAPApp Is Nothing Then Exit Function
     
-CheckAgain:
+TryAgain:
 
-    On Error Resume Next
+    On Error GoTo Error_Handler
+    
+    'If system ID was not specified - get current one
+    If systemName = "" Then
+        SAPSystemName = vSession.Info.systemName
+    Else
+        SAPSystemName = systemName
+    End If
     
     'Start Transaction - should raise an error if diconnected
     If tCode <> "" Then
         vSession.StartTransaction tCode
     End If
     
-    If Err.Number = error_SAP_Disconnected Then
-        Err.Clear
-        response = MsgBox("Log in again, and click Yes to continue.", vbCritical + vbYesNo, "SAP got disconnected")
-
-        If response = vbYes Then
-            SAP_Init vSession, systemID
-
-            GoTo CheckAgain
-        End If
-    End If
-
-    If Err.Number = 0 Then
-        SAP_Activated = True
-    Else
-        Err.Clear
-    End If
-
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
     On Error GoTo -1
+    
+    If Not (vSession Is Nothing) Then
+        SAP_Activated = True
+    End If
 End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -939,7 +1171,11 @@ Function SAP_SelectMenu(vSession As Object, menuPath As String, Optional menuSep
     
         listMenu(UBound(listMenu)) = Trim(menuPath)
     End If
+
+TryAgain:
     
+    On Error GoTo Error_Handler
+
     'Menu bar
     SID = "wnd[0]/mbar"
     
@@ -973,7 +1209,15 @@ Function SAP_SelectMenu(vSession As Object, menuPath As String, Optional menuSep
     End If
     
     SAP_SelectMenu = menuExists
+
+Error_Handler:
     
+    'If we get disconnected when selecting menu ... then we have to handle such exception outside of this function ...
+    'User has to completely restart transaction
+    
+    'If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    'On Error GoTo -1
+
 Exit_Program:
 
     Erase listMenu
@@ -1035,6 +1279,8 @@ Function SAP_FormatUnconvertedFile(inputFileName As String, outpuFileName As Str
     
     SAP_FormatUnconvertedFile = False
     
+    ReDim listFieldInfo(0): listFieldInfo(0) = Array(1, 1) 'General
+    
     rowSwitch = 0
     flagFixBrokenFormat = False
 
@@ -1078,7 +1324,7 @@ Function SAP_FormatUnconvertedFile(inputFileName As String, outpuFileName As Str
             End If
             
             If flagFixBrokenFormat Then
-                Application.statusBar = "SAP_FormatUnconvertedFile: file format is broken - working on it"
+                Application.StatusBar = "SAP_FormatUnconvertedFile: file format is broken - working on it"
             End If
         End If
 
@@ -1170,7 +1416,7 @@ RestartLoop:
                                             End If
                                             
                                             If concatLen = wordLen(I) Then
-                                                Application.statusBar = "SAP_FormatUnconvertedFile: removing extra pipes '|'"
+                                                Application.StatusBar = "SAP_FormatUnconvertedFile: removing extra pipes '|'"
                                                 flagRemovePipes = True
                                                 
                                                 For K = I + 1 To J
@@ -1222,6 +1468,19 @@ RestartLoop:
                     For I = LBound(wordTrim) To UBound(wordTrim)
                         wordTrim(I) = Trim(wordTrim(I))
                         
+                        If I > UBound(listFieldInfo) Then
+                            ReDim Preserve listFieldInfo(UBound(listFieldInfo) + 1)
+                            listFieldInfo(UBound(listFieldInfo)) = Array(I + 1, 1) 'General
+                        End If
+                        
+                        'I hate excel ...
+                        'Seems like it automatically assumes numerical entry is number and truncates value of such field ... wtf
+                        If IsNumeric(wordTrim(I)) Then
+                            If Len(wordTrim(I)) > 16 Then
+                                listFieldInfo(I) = Array(I + 1, 2) 'Text
+                            End If
+                        End If
+                        
                         If I > 0 Then
                             newLine = newLine & "|"
                         End If
@@ -1262,7 +1521,7 @@ Error_Handler:
     
     On Error GoTo -1
     
-    Application.statusBar = False
+    Application.StatusBar = False
 
     Set inputFile = Nothing
     Set outputFile = Nothing
@@ -1304,9 +1563,12 @@ End Function
 '   SAP_ExportToExcel Session, "EXPORT.MHTML", ["C:\USERS\ME\DESKTOP"]
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optional filePath As String = "", Optional keepOpened As Boolean = False) As Boolean
+    'By default XLSX ... will be actually unconverted
     Const fileFormat_Unconverted = 0
     Const fileFormat_XLS As Long = 1
     Const fileFormat_MHTML As Long = 2
+    'XLSX will be used only internally with CustomControl objects
+    Const fileFormat_XLSX As Long = 3
     
     Dim I As Long
 
@@ -1326,6 +1588,10 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
     
     Dim newWorkbook As Boolean
     Dim listOpenedWorkbooks() As String
+    
+    Dim flagCustomControl As Boolean
+    
+    flagCustomControl = False
     
     ReDim listOpenedWorkbooks(0): listOpenedWorkbooks(0) = ""
     
@@ -1351,8 +1617,9 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
     
     filePath = filePathSaveAs
     
-    'Safety check
-    If SAP_Activated(vSession) = False Then GoTo Exit_Program
+'TryAgain:
+    
+    On Error GoTo Error_Handler
     
     'Safety check (required in case of asynchronous mode - why would we use it?)
     Do: Loop While vSession.Busy
@@ -1360,7 +1627,7 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
     'Default name
     If fileName = "" Then fileName = "SAP_Export_" & Format(Now(), "YYYY-MM-DD HH MM SS") & ".XLS"
     
-    fileExtension = getFileExtension(fileName)
+    fileExtension = GetFileExtension(fileName)
     fileExtension = Trim(fileExtension)
     fileExtension = UCase(fileExtension)
     
@@ -1372,7 +1639,6 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
     Select Case fileExtension
     Case "TXT", "XLSX":
         fileFormat = fileFormat_Unconverted
-        fileName = changeExtension(fileName, "TXT")
     
     Case "MHTML":
         iconName = "LISVIE"
@@ -1412,24 +1678,35 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
         If exporting = False Then
             'If shell container is available ...
             For Each o In vSession.FindByID("wnd[0]/usr").Children
+                SID = ""
+                
                 If UCase(SAP_GetSID(o.ID, "cntlCONTAINER")) = UCase("cntlCONTAINER") Then
-                    
                     SID = "wnd[0]/usr/cntlCONTAINER/shellcont/shell"
+                End If
+
+                'GuiCustomControl
+                If o.Type = "GuiCustomControl" Then
+                    SID = o.ID & "/shellcont/shell"
+                    flagCustomControl = True
+                End If
+                
+'                If UCase(SAP_GetSID(o.ID, "cntlCUST_CONTRL")) = UCase("cntlCUST_CONTRL") Then
+'                    SID = "wnd[0]/usr/cntlCUST_CONTRL/shellcont/shell"
+'                End If
+                
+                If SID <> "" Then
 
                     Do
-                        If fileFormat = fileFormat_MHTML Then
+                        If fileFormat = fileFormat_MHTML Or flagCustomControl Then
                             vSession.FindByID(SID).contextMenu
-                            Do: Loop While vSession.Busy
-                            
-                            vSession.FindByID(SID).SelectContextMenuItem "&XXL"
-                            Do: Loop While vSession.Busy
+                            vSession.FindByID(SID).selectContextMenuItem "&XXL"
                         Else
                             vSession.FindByID(SID).PressToolbarContextButton "&MB_EXPORT"
-                            Do: Loop While vSession.Busy
-                            
-                            vSession.FindByID(SID).SelectContextMenuItem "&PC"
-                            Do: Loop While vSession.Busy
+                            vSession.FindByID(SID).selectContextMenuItem "&PC"
                         End If
+                        
+                        While vSession.Busy
+                        Wend
                         
                         loopCounter = loopCounter + 1
                         
@@ -1460,32 +1737,52 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
     If exporting Then
         exporting = False
         
-        'In case of MHTML format Radio buttons are children of wnd[1]/usr
+        'In case of Custom Control format Radio buttons are children of wnd[1]/usr
         'In case of Local file (XLS) / Unconverted (TXT) format radio buttons are children of wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150
         
         'Find out which object ID is valid (we don't really need to use this function, but we can :))
         SID = SAP_GetValidObjectID(vSession, Array("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150", "wnd[1]/usr"), "wnd[1]/usr")
         
         If SID <> "" Then
-            For Each o In vSession.FindByID(SID).Children
-                If fileFormat = fileFormat_Unconverted Then
-                    If UCase(Trim(o.Text)) = "UNCONVERTED" Then
+            'Handle XLSX format in Custom Control
+            If vSession.FindByID("wnd[1]").Text = "Select Spreadsheet" Then
+                If SAP_GetValidObjectID(vSession, "wnd[1]/usr/cmbG_LISTBOX") <> "" Then
+                    vSession.FindByID("wnd[1]/usr/radRB_OTHERS").Selected = True
+                    
+                    exporting = False
+                    
+                    'Select XLSX
+                    If SAP_GuiComboBox_SelectValue(vSession, "wnd[1]/usr/cmbG_LISTBOX", "Excel - Office Open XML Format (XLSX)") Then
                         exporting = True
-                        Exit For
                     End If
-                Else
-                    If stringIsInArray(UCase(Trim(o.Text)), Array("SPREADSHEET", "TEXT WITH TABS", "EXCEL (IN MHTML FORMAT")) Then
-                        exporting = True
-                        Exit For
-                    End If
+                    
+                    fileFormat = fileFormat_XLSX
                 End If
-            Next o
+            End If
+            
+            If exporting = False Then
+                For Each o In vSession.FindByID(SID).Children
+                    If fileFormat = fileFormat_Unconverted Then
+                        If UCase(Trim(o.Text)) = "UNCONVERTED" Then
+                            o.Select
+                            Set o = Nothing
+                            
+                            exporting = True
+                            Exit For
+                        End If
+                    Else
+                        If stringIsInArray(UCase(Trim(o.Text)), Array("SPREADSHEET", "TEXT WITH TABS", "EXCEL (IN MHTML FORMAT)")) Then
+                            o.Select
+                            Set o = Nothing
+                            
+                            exporting = True
+                            Exit For
+                        End If
+                    End If
+                Next o
+            End If
             
             If exporting = True Then
-                SID = o.ID: Set o = Nothing
-                
-                vSession.FindByID(SID).Select
-                
                 'Ok, Continue
                 vSession.FindByID("wnd[1]/tbar[0]/btn[0]").Press
             End If
@@ -1493,7 +1790,12 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
             Set o = Nothing
         End If
     End If
-    
+
+    'if we are exporting to unconverted - we have to use .TXT extension
+    If fileFormat = fileFormat_Unconverted Then
+        fileName = ChangeExtension(fileName, "TXT")
+    End If
+
     'Specify filepath and filename
     If exporting = True Then
         
@@ -1529,43 +1831,45 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
         
         If SID <> "" Then
             exporting = False
-            Application.statusBar = "ERROR !"
+            Application.StatusBar = "ERROR !"
             MsgBox "Error while saving file: " & fileName, vbOKOnly, "SAP EXPORT ERROR !"
         End If
     End If
 
     'Wait till exported (probably not required, but should not harm)
-    Do: Loop While vSession.Busy
+    While vSession.Busy
+    Wend
     
     If exporting Then
         'In case of unconverted format - we want to actually open file and convert it
         If fileFormat = fileFormat_Unconverted Then
             'Format file - save it to new temporary file
             If SAP_FormatUnconvertedFile(filePath & fileName, filePath & "$TEMP.FORMAT.UNCONVERTED." & fileName) Then
-                
                 'File extension has to be TXT !? Stupid excel ...
-                Workbooks.OpenText fileName:=filePath & "$TEMP.FORMAT.UNCONVERTED." & fileName, Origin:=437, StartRow:=1, DataType:=xlDelimited, TextQualifier:=xlDoubleQuote, ConsecutiveDelimiter:=False, Tab:=False, Semicolon:=False, Comma:=False, Space:=False, Other:=True, OtherChar:="|", TrailingMinusNumbers:=True
+                Workbooks.OpenText fileName:=filePath & "$TEMP.FORMAT.UNCONVERTED." & fileName, Origin:=437, StartRow:=1, DataType:=xlDelimited, TextQualifier:=xlDoubleQuote, ConsecutiveDelimiter:=False, Tab:=False, Semicolon:=False, Comma:=False, Space:=False, Other:=True, OtherChar:="|", TrailingMinusNumbers:=True, FieldInfo:=listFieldInfo
+                
+                Erase listFieldInfo
                 
                 'TODO: is this reliable ?
                 Set WB = ActiveWorkbook
                 
                 'Change Sheet name by default to Sheet1
                 WB.ActiveSheet.Name = "Sheet1"
-                WB.saveAs filePath & changeExtension(fileName, "XLSX"), fileFormat:=xlOpenXMLWorkbook
+                WB.SaveAs filePath & ChangeExtension(fileName, "XLSX"), fileFormat:=xlOpenXMLWorkbook
                 
                 'Delete temporary file
                 FSO_DeleteFile filePath & "$TEMP.FORMAT.UNCONVERTED." & fileName
                 
                 'Update fileName
-                fileName = changeExtension(fileName, "XLSX")
+                fileName = ChangeExtension(fileName, "XLSX")
                 
                 'Close Workbook if we don't want to open it
                 If keepOpened = False Then WB.Close
             End If
         End If
         
-        'SAP opens MHTML file automatically
-        If fileFormat = fileFormat_MHTML Then
+        'In case of Custom Control export SAP opens file automatically (MHTML, XLSX)
+        If fileFormat = fileFormat_MHTML Or fileFormat = fileFormat_XLSX Then
             Dim innerTimer As Double
             
             innerTimer = Now
@@ -1621,6 +1925,18 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
         End If
     End If
 
+Error_Handler:
+
+    If Err.Number <> 0 Then
+        exporting = False
+    End If
+    
+    'If we get disconnected when exporting data ... then we have to handle such exception outside of this function ...
+    'User has to completely restart transaction
+    
+    'If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    'On Error GoTo -1
+
 Exit_Program:
 
     Set WB = Nothing
@@ -1645,7 +1961,7 @@ Function SAP_ExportToExcelAndOpen(vSession As Object, ByVal fileName As String, 
     'Export
     If SAP_ExportToExcel(vSession, fileName, filePath, True) Then
         'Open
-        Workbooks.Open (filePath & fileName)
+        'Workbooks.Open (filePath & fileName)
     
         'Check if opened ...
         If ActiveWorkbook.Name = fileName Then SAP_ExportToExcelAndOpen = True
@@ -1664,9 +1980,10 @@ Function SAP_SelectVariant(vSession As Object, variantName As String) As Boolean
     
     SAP_SelectVariant = False
     
-    'Safety check
-    If SAP_Activated(vSession) = False Then GoTo Exit_Program
-        
+'TryAgain:
+
+    On Error GoTo Error_Handler
+
     'Let's try it by using a SAP_SelectMenu function
     If SAP_SelectMenu(vSession, "Goto>Variants>Get...") = False Then
         
@@ -1734,10 +2051,17 @@ Function SAP_SelectVariant(vSession As Object, variantName As String) As Boolean
         End If
     End If
 
+Error_Handler:
+    
+    'If we get disconnected when exporting data ... then we have to handle such exception outside of this function ...
+    'User has to completely restart transaction
+    
+    'If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    'On Error GoTo -1
+
 Exit_Program:
     
     Set o = Nothing
-    
 End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1750,23 +2074,25 @@ Function SAP_StartSQ_Wrapper(vSession As Object, tCode As String, userGroup As S
     
     Dim SID As String
     Dim thisUserGroup As String
-    Dim statusBar As String
+    Dim sbar As String
 
     Dim queryExecuted As Boolean
     
     queryExecuted = False
     SAP_StartSQ_Wrapper = False
-    statusBar = ""
+    sbar = ""
     
-    If SAP_Activated(vSession) = False Then GoTo Exit_Program
+TryAgain:
+
+    On Error GoTo Error_Handler
     
     queryName = UCase(Trim(queryName))
     userGroup = UCase(Trim(userGroup))
     
     vSession.StartTransaction (tCode)
-    statusBar = SAP_GetStatusBar(vSession)
+    sbar = SAP_GetStatusBar(vSession)
     
-    If statusBar <> "" Then GoTo Exit_Program
+    If sbar <> "" Then GoTo Exit_Program
 
     'Check if Query Area is Standard area
     If UCase(Trim(vSession.FindByID("wnd[0]/usr/txtRS38R-WSTEXT").Text)) Like UCase("*Standard Area*") Then
@@ -1855,7 +2181,7 @@ Function SAP_StartSQ_Wrapper(vSession As Object, tCode As String, userGroup As S
         End If
     End If
     
-'Select Query
+    'Select Query
     If queryExecuted = True Then
         queryExecuted = False
         
@@ -1885,15 +2211,20 @@ Function SAP_StartSQ_Wrapper(vSession As Object, tCode As String, userGroup As S
         'Execute query
         vSession.FindByID("wnd[0]/tbar[1]/btn[8]").Press
 
-        statusBar = vSession.FindByID("wnd[0]/sbar").Text
-        If statusBar <> "" Then queryExecuted = False
+        sbar = vSession.FindByID("wnd[0]/sbar").Text
+        If sbar <> "" Then queryExecuted = False
     End If
+
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
 
 Exit_Program:
 
     SAP_StartSQ_Wrapper = queryExecuted
 
-    If statusBar <> "" Then MsgBox statusBar, vbCritical, "SAP Start " & tCode
+    If sbar <> "" Then MsgBox sbar, vbCritical, "SAP Start " & tCode
 
     Set o = Nothing
 End Function
@@ -1923,8 +2254,8 @@ Function SAP_LoadAllObjects(vSession As Object, Optional ByVal searchArea As Str
     
     Dim o As Object
     
-    Dim currentLevel As Long
-    Dim currentPosition As Long
+    Dim CurrentLevel As Long
+    Dim CurrentPosition As Long
     
     Dim uniqueID As String
     
@@ -1934,101 +2265,109 @@ Function SAP_LoadAllObjects(vSession As Object, Optional ByVal searchArea As Str
     
     loadingIndicator = "|"
     
-    If SAP_Activated(vSession) Then
+TryAgain:
+
+    On Error GoTo Error_Handler
         
-        'In order to speed up functions which are reading objects from same screen I am using this unique identifier (passportTransactionID & screen number & searchArea)
-        'to find out whether list of object IDs should be refreshed
-        'TODO: check if this unique ID is really unique :)
-        uniqueID = vSession.passportTransactionID & vSession.Info.ScreenNumber & searchArea
+    'In order to speed up functions which are reading objects from same screen I am using this unique identifier (passportTransactionID & screen number & searchArea)
+    'to find out whether list of object IDs should be refreshed
+    'TODO: check if this unique ID is really unique :)
+    uniqueID = vSession.passportTransactionID & vSession.Info.ScreenNumber & searchArea
+    
+    If uniqueID <> passportTransactionID Then
+        passportTransactionID = uniqueID
+    
+        ReDim listAllSID(0)
+    
+        I = 0
+        CurrentLevel = 0
         
-        If uniqueID <> passportTransactionID Then
-            passportTransactionID = uniqueID
-        
-            ReDim listAllSID(0)
-        
-            I = 0
-            currentLevel = 0
+        If searchArea <> "" Then
+            listAllSID(CurrentLevel).ID = searchArea
+        Else
+            listAllSID(CurrentLevel).ID = "wnd[0]"
+        End If
             
-            If searchArea <> "" Then
-                listAllSID(currentLevel).ID = searchArea
-            Else
-                listAllSID(currentLevel).ID = "wnd[0]"
-            End If
-                
 LoadDataFromNextLevel:
+        
+        If sortList Then CurrentPosition = CurrentLevel
+        
+        'Load all objects from searchArea
+        If vSession.FindByID(listAllSID(CurrentLevel).ID).containerType = True Then
             
-            If sortList Then currentPosition = currentLevel
-            
-            'Load all objects from searchArea
-            If vSession.FindByID(listAllSID(currentLevel).ID).containerType = True Then
-                
-                If Not vSession.FindByID(listAllSID(currentLevel).ID).Children Is Nothing Then
-                    If vSession.FindByID(listAllSID(currentLevel).ID).Children.Count > 0 Then
-                        For Each o In vSession.FindByID(listAllSID(currentLevel).ID).Children
-                            
-                            ReDim Preserve listAllSID(UBound(listAllSID) + 1)
-                            
-                            '--- Object sorting - slows down process, so use only if you need it
-                            
-                            currentPosition = currentPosition + 1
-    
-                            If sortList Then
-                                If UBound(listAllSID) > currentPosition Then
-                                    For I = UBound(listAllSID) To currentPosition + 1 Step -1
-                                        listAllSID(I) = listAllSID(I - 1)
-                                    Next I
-                                End If
+            If Not vSession.FindByID(listAllSID(CurrentLevel).ID).Children Is Nothing Then
+                If vSession.FindByID(listAllSID(CurrentLevel).ID).Children.Count > 0 Then
+                    For Each o In vSession.FindByID(listAllSID(CurrentLevel).ID).Children
+                        
+                        ReDim Preserve listAllSID(UBound(listAllSID) + 1)
+                        
+                        '--- Object sorting - slows down process, so use only if you need it
+                        
+                        CurrentPosition = CurrentPosition + 1
+
+                        If sortList Then
+                            If UBound(listAllSID) > CurrentPosition Then
+                                For I = UBound(listAllSID) To CurrentPosition + 1 Step -1
+                                    listAllSID(I) = listAllSID(I - 1)
+                                Next I
                             End If
-                            
-                            '---
-                            
-                            listAllSID(currentPosition).ID = o.ID
-                            listAllSID(currentPosition).typeValue = o.Type
-                            listAllSID(currentPosition).textValue = o.Text
-                            listAllSID(currentPosition).nameValue = o.Name
-                            
-                            'Safe extraction of changeAble property (not all objects have changeAble property)
-                            listAllSID(currentPosition).changeAble = SAP_GetChangeAble(o)
-                            
-                            'If listAllSID(currentPosition).changeAble Then
-                            '    Dim r As Long
-                            '    r = GetRows(ThisWorkbook.Sheets("GUIObjectsUsage"), 1) + 1
-                            '    ThisWorkbook.Sheets("GUIObjectsUsage").Cells(r, 1).Formula = o.type
-                            'End If
-    
-                            listAllSID(currentPosition).containerType = o.containerType
-                            
-                            Set o = Nothing
-                        Next o
-    
+                        End If
+                        
+                        '---
+                        
+                        listAllSID(CurrentPosition).ID = o.ID
+                        listAllSID(CurrentPosition).typeValue = o.Type
+                        listAllSID(CurrentPosition).textValue = o.Text
+                        listAllSID(CurrentPosition).nameValue = o.Name
+                        
+                        'Safe extraction of changeAble property (not all objects have changeAble property)
+                        listAllSID(CurrentPosition).changeAble = SAP_GetChangeAble(o)
+                        
+                        'If listAllSID(currentPosition).changeAble Then
+                        '    Dim r As Long
+                        '    r = GetRows(ThisWorkbook.Sheets("GUIObjectsUsage"), 1) + 1
+                        '    ThisWorkbook.Sheets("GUIObjectsUsage").Cells(r, 1).Formula = o.type
+                        'End If
+
+                        listAllSID(CurrentPosition).containerType = o.containerType
+                        
                         Set o = Nothing
-                    End If
+                    Next o
+
+                    Set o = Nothing
                 End If
             End If
-                
-            '|/-\
-            Application.statusBar = "SAP: loading all objects (this might take a while) " & loadingIndicator
-            
-            If loadingIndicator = "|" Then
-                loadingIndicator = "/"
-            ElseIf loadingIndicator = "/" Then
-                loadingIndicator = "-"
-            ElseIf loadingIndicator = "-" Then
-                loadingIndicator = "\"
-            ElseIf loadingIndicator = "\" Then
-                loadingIndicator = "|"
-            End If
-            
-            If currentLevel < UBound(listAllSID) Then
-                currentLevel = currentLevel + 1
-                GoTo LoadDataFromNextLevel
-            End If
         End If
-    
-        SAP_LoadAllObjects = True
+            
+        '|/-\
+        Application.StatusBar = "SAP: loading all objects (this might take a while) " & loadingIndicator
+        
+        If loadingIndicator = "|" Then
+            loadingIndicator = "/"
+        ElseIf loadingIndicator = "/" Then
+            loadingIndicator = "-"
+        ElseIf loadingIndicator = "-" Then
+            loadingIndicator = "\"
+        ElseIf loadingIndicator = "\" Then
+            loadingIndicator = "|"
+        End If
+        
+        If CurrentLevel < UBound(listAllSID) Then
+            CurrentLevel = CurrentLevel + 1
+            GoTo LoadDataFromNextLevel
+        End If
     End If
 
-    Application.statusBar = False
+    SAP_LoadAllObjects = True
+
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
+
+Exit_Program:
+
+    Application.StatusBar = False
 
     Set o = Nothing
 End Function
@@ -2039,6 +2378,8 @@ End Function
 Function SAP_GetValidObjectID(vSession As Object, ByVal v As Variant, Optional searchArea As String = "") As String
     Dim I As Long
     Dim J As Long
+    
+    Dim o As Object
     
     Dim listSID() As String
     
@@ -2052,19 +2393,42 @@ Function SAP_GetValidObjectID(vSession As Object, ByVal v As Variant, Optional s
         Next I
     Else
         ReDim listSID(0)
-        listSID(0) = v
+        listSID(0) = CStr(v)
     End If
+
+TryAgain:
+
+'    On Error GoTo Error_Handler
+
+    For I = LBound(listSID) To UBound(listSID)
+        'Fast method to check if object ID exists
+        Set o = vSession.FindByID(listSID(I), False)
+        
+        If Not o Is Nothing Then
+            SAP_GetValidObjectID = listSID(I)
+            
+            Set o = Nothing
+            Exit Function
+        End If
+    Next I
     
-    If SAP_LoadAllObjects(vSession, searchArea) Then
-        For I = LBound(listSID) To UBound(listSID)
-            For J = LBound(listAllSID) To UBound(listAllSID)
-                If SAP_GetSID(listSID(I)) = SAP_GetSID(listAllSID(J).ID) Then
-                    SAP_GetValidObjectID = listSID(I)
-                    Exit Function
-                End If
-            Next J
-        Next I
-    End If
+    Set o = Nothing
+    
+Error_Handler:
+    
+'    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+'    On Error GoTo -1
+    
+'    If SAP_LoadAllObjects(vSession, searchArea) Then
+'        For I = LBound(listSID) To UBound(listSID)
+'            For J = LBound(listAllSID) To UBound(listAllSID)
+'                If SAP_GetSID(listSID(I)) = SAP_GetSID(listAllSID(J).ID) Then
+'                    SAP_GetValidObjectID = listSID(I)
+'                    Exit Function
+'                End If
+'            Next J
+'        Next I
+'    End If
 End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -2073,11 +2437,18 @@ End Function
 Function SAP_TableVScrollBarReadyToScroll(vSession As Object, ByVal rowNumber As Long, ByVal tableSID As String) As Boolean
     SAP_TableVScrollBarReadyToScroll = False
     
-    If SAP_Activated(vSession) Then
-        If rowNumber = (vSession.FindByID(tableSID).VerticalScrollBar.Position + vSession.FindByID(tableSID).VerticalScrollBar.PageSize) Then
-            SAP_TableVScrollBarReadyToScroll = True
-        End If
+TryAgain:
+
+    On Error GoTo Error_Handler
+        
+    If rowNumber = (vSession.FindByID(tableSID).VerticalScrollbar.Position + vSession.FindByID(tableSID).VerticalScrollbar.PageSize) Then
+        SAP_TableVScrollBarReadyToScroll = True
     End If
+
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
 End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -2086,11 +2457,18 @@ End Function
 Function SAP_TableHScrollBarReadyToScroll(vSession As Object, ByVal colNumber As Long, ByVal tableSID As String) As Boolean
     SAP_TableHScrollBarReadyToScroll = False
     
-    If SAP_Activated(vSession) Then
-        If colNumber = (vSession.FindByID(tableSID).HorizontalScrollBar.Position + vSession.FindByID(tableSID).HorizontalScrollBar.PageSize) Then
-            SAP_TableHScrollBarReadyToScroll = True
-        End If
+TryAgain:
+
+    On Error GoTo Error_Handler
+
+    If colNumber = (vSession.FindByID(tableSID).HorizontalScrollBar.Position + vSession.FindByID(tableSID).HorizontalScrollBar.PageSize) Then
+        SAP_TableHScrollBarReadyToScroll = True
     End If
+
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
 End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -2101,7 +2479,7 @@ Function SAP_TreeGetColumnNameByTitle(vTreeStructure As T_SAP_Tree, ByVal column
     Dim I As Long
     
     SAP_TreeGetColumnNameByTitle = ""
-    
+
     For I = LBound(vTreeStructure.columns) To UBound(vTreeStructure.columns)
         If columnTitle = vTreeStructure.columns(I).columnTitle Then
             SAP_TreeGetColumnNameByTitle = vTreeStructure.columns(I).columnName
@@ -2128,9 +2506,22 @@ End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 '   Function loads SAP tree structure
+'    - searchForQuery is an optional parameter
+'    - searchForQuery has to be *min* 2 dimensional array --> first parameter is column index, second is column item value
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Function SAP_TreeLoadStructure(vSession As Object, ByVal vTreeStructureSID As String, vTreeStructure As T_SAP_Tree) As Boolean
+
+'Internal function to get title from name - without raising an error :-/
+Function SAP_TreeGetColumnTitleFromName(vSession As Object, ByVal vTreeStructureSID As String, ByVal columnName As String) As String
+    SAP_TreeGetColumnTitleFromName = ""
+    
+    On Error Resume Next
+    SAP_TreeGetColumnTitleFromName = vSession.FindByID(vTreeStructureSID).GetColumnTitleFromName(columnName)
+    On Error GoTo -1
+End Function
+
+Function SAP_TreeLoadStructure(vSession As Object, ByVal vTreeStructureSID As String, vTreeStructure As T_SAP_Tree, Optional searchForQuery As Variant = "") As Boolean
     Dim I As Long
+    Dim J As Long
 
     Dim nodeKey As String
     Dim nodePath As String
@@ -2140,11 +2531,41 @@ Function SAP_TreeLoadStructure(vSession As Object, ByVal vTreeStructureSID As St
     Dim o As Object
     
     Dim items() As String
+    Dim listQuery() As T_SAP_TreeItemQuery
     
+    Dim flagQueryItemsFound As Boolean
+
     Dim loadingIndicator As String
-    
+
     SAP_TreeLoadStructure = False
     
+TryAgain:
+
+    On Error GoTo Error_Handler
+
+'-- Are we searching Specific query(ies)?
+
+    ReDim listQuery(0): listQuery(0).listIndex = -1
+
+    'Convert query
+    If IsArray(searchForQuery) Then
+        For I = LBound(searchForQuery) To UBound(searchForQuery)
+            'Convert 2 dimensional array to 1 dimensional query
+            If I Mod 2 = 0 Then
+                If IsNumeric(CStr(searchForQuery(I))) Then
+                    If listQuery(0).listIndex > -1 Then ReDim Preserve listQuery(UBound(listQuery) + 1)
+
+                    listQuery(UBound(listQuery)).listIndex = Val(CStr(searchForQuery(I)))
+                    listQuery(UBound(listQuery)).flagFound = False
+                End If
+            Else
+                listQuery(UBound(listQuery)).columnValue = searchForQuery(I)
+            End If
+        Next I
+    End If
+    
+'--
+
     nodePath = "1"
     
     loadingIndicator = "|"
@@ -2156,13 +2577,14 @@ Function SAP_TreeLoadStructure(vSession As Object, ByVal vTreeStructureSID As St
     vTreeStructure.listTreeNodes(0).nodeItems = Null
 
     vTreeStructure.SID = vTreeStructureSID
-    
+    vTreeStructure.selectedNodeKey = ""
+
     'Get column names
     Set o = vSession.FindByID(vTreeStructureSID).GetColumnNames
     
-    ReDim vTreeStructure.columns(o.length)
+    ReDim vTreeStructure.columns(o.Length)
     
-    For I = 0 To o.length - 1
+    For I = 0 To o.Length - 1
         If CStr(o(I)) <> "" Then
             vTreeStructure.columns(I).columnName = CStr(o(I))
         End If
@@ -2170,13 +2592,16 @@ Function SAP_TreeLoadStructure(vSession As Object, ByVal vTreeStructureSID As St
     
     Set o = Nothing
 
-    'Get column titles
+    'Get column headers
     Set o = vSession.FindByID(vTreeStructureSID).GetColumnTitles
     
-    For I = 0 To o.length - 1
-        If CStr(o(I)) <> "" Then
-            vTreeStructure.columns(I).columnTitle = CStr(o(I))
-        End If
+    For I = 0 To o.Length - 1
+        For J = LBound(vTreeStructure.columns) To UBound(vTreeStructure.columns)
+            If CStr(o(I)) <> "" And CStr(o(I)) = vTreeStructure.columns(J).columnName Then
+                'Meh, not sure how to work with this ... so doing it a slightly dirty way
+                vTreeStructure.columns(J).columnTitle = SAP_TreeGetColumnTitleFromName(vSession, vTreeStructureSID, CStr(o(I)))
+            End If
+        Next J
     Next I
     
     Set o = Nothing
@@ -2200,9 +2625,38 @@ Function SAP_TreeLoadStructure(vSession As Object, ByVal vTreeStructureSID As St
             For I = LBound(vTreeStructure.columns) To UBound(vTreeStructure.columns)
                 If items(0) <> "" Then ReDim Preserve items(UBound(items) + 1)
                 items(UBound(items)) = vSession.FindByID(vTreeStructureSID).GetItemText(nodeKey, vTreeStructure.columns(I).columnName)
+                
+                'Search for specific query
+                If listQuery(0).listIndex > -1 Then
+                    For J = LBound(listQuery) To UBound(listQuery)
+                        'Check if index matches
+                        If listQuery(J).listIndex = I Then
+                            'Check if column value matches
+                            If listQuery(J).columnValue = items(UBound(items)) Then
+                                listQuery(J).flagFound = True
+                                Exit For
+                            End If
+                        End If
+                    Next J
+                End If
             Next I
             
+            'Store items in our structure
             vTreeStructure.listTreeNodes(UBound(vTreeStructure.listTreeNodes)).nodeItems = items
+            
+            'Check query items - do we have all required? ...
+            If listQuery(0).listIndex > -1 Then
+                flagQueryItemsFound = True
+                For J = LBound(listQuery) To UBound(listQuery)
+                    If listQuery(J).flagFound = False Then
+                        flagQueryItemsFound = False
+                        Exit For
+                    End If
+                Next J
+            End If
+
+            '... if we do - Exit loop
+            If flagQueryItemsFound Then Exit Do
             
             '---
             
@@ -2215,11 +2669,11 @@ Function SAP_TreeLoadStructure(vSession As Object, ByVal vTreeStructureSID As St
                 vSession.FindByID(vTreeStructureSID).ExpandNode vTreeStructure.listTreeNodes(UBound(vTreeStructure.listTreeNodes)).nodeKey
                 nodePath = nodePath & "\" & 1
             Else
-                nodePath = getNextNodePath(nodePath)
+                nodePath = GetNextNodePath(nodePath)
             End If
         
             '|/-\
-            Application.statusBar = "SAP: loading tree structure (this might take a while) " & loadingIndicator
+            Application.StatusBar = "SAP: loading tree structure (this might take a while) " & loadingIndicator
             
             If loadingIndicator = "|" Then
                 loadingIndicator = "/"
@@ -2233,14 +2687,92 @@ Function SAP_TreeLoadStructure(vSession As Object, ByVal vTreeStructureSID As St
         Else
             If InStr(nodePath, "\") > 0 Then
                 nodeKey = "do not exit please"
-                nodePath = getNextNodePathParent(nodePath)
+                nodePath = GetNextNodePathParent(nodePath)
             End If
         End If
     Loop While nodeKey > ""
+
+Error_Handler:
     
-    Application.statusBar = False
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
+
+    Application.StatusBar = False
 
     If vTreeStructure.listTreeNodes(0).nodeKey <> "" Then SAP_TreeLoadStructure = True
+End Function
+
+Function SAP_TreeSelectItem(vSession As Object, vTreeStructure As T_SAP_Tree, columnNameText As String, columnValue As String) As Boolean
+    Dim I As Long
+    
+    Dim columnNo As Long
+    Dim columnName As String
+
+    SAP_TreeSelectItem = False
+
+TryAgain:
+
+    On Error GoTo Error_Handler
+
+    columnNo = SAP.SAP_TreeGetColumnNumberByTitle(vTreeStructure, columnNameText)
+    columnName = SAP.SAP_TreeGetColumnNameByTitle(vTreeStructure, columnNameText)
+
+    For I = LBound(vTreeStructure.listTreeNodes) To UBound(vTreeStructure.listTreeNodes)
+        If vTreeStructure.listTreeNodes(I).nodeItems(columnNo) = columnValue Then
+            vSession.FindByID(vTreeStructure.SID).SelectItem vTreeStructure.listTreeNodes(I).nodeKey, columnName
+            vSession.FindByID(vTreeStructure.SID).EnsureVisibleHorizontalItem vTreeStructure.listTreeNodes(I).nodeKey, columnName
+            
+            vTreeStructure.selectedNodeKey = vTreeStructure.listTreeNodes(I).nodeKey
+            
+            SAP_TreeSelectItem = True
+            Exit Function
+        End If
+    Next I
+
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
+
+End Function
+
+'This needs to be used in combination with SAP_TreeSelectItem!
+Function SAP_TreeChangeCheckbox(vSession As Object, vTreeStructure As T_SAP_Tree, columnNameText As String, checked As Boolean) As Boolean
+    Dim I As Long
+    
+    Dim columnNo As Long
+    Dim columnName As String
+
+    SAP_TreeChangeCheckbox = False
+
+TryAgain:
+
+    On Error GoTo Error_Handler
+    
+    If vTreeStructure.selectedNodeKey = "" Then Exit Function
+
+    columnName = SAP.SAP_TreeGetColumnNameByTitle(vTreeStructure, columnNameText)
+    
+    'trvTreeStructureHierarchy  = 0
+    'trvTreeStructureImage      = 1
+    'trvTreeStructureText       = 2
+    'trvTreeStructureBool       = 3
+    'trvTreeStructureButton     = 4
+    'trvTreeStructureLink       = 5
+
+    'trvTreeStructureBool = 3 --> checkbox
+    If vSession.FindByID(vTreeStructure.SID).GetItemType(vTreeStructure.selectedNodeKey, columnName) <> 3 Then Exit Function
+    
+    If vSession.FindByID(vTreeStructure.SID).GetCheckBoxState(vTreeStructure.selectedNodeKey, columnName) <> checked Then
+        vSession.FindByID(vTreeStructure.SID).ChangeCheckbox vTreeStructure.selectedNodeKey, columnName, checked
+    End If
+    
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
+    
+    SAP_TreeChangeCheckbox = True
 End Function
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -2313,8 +2845,9 @@ Function SAP_SelectLayout(vSession As Object, layoutName As String) As Boolean
     
     SAP_SelectLayout = False
     
-    'Safety check
-    If SAP_Activated(vSession) = False Then GoTo Exit_Program
+TryAgain:
+
+    On Error GoTo Error_Handler
         
     'Let's try it by using a SAP_SelectMenu function
     If SAP_SelectMenu(vSession, "Settings>Layout>Choose...") Then
@@ -2334,16 +2867,19 @@ Function SAP_SelectLayout(vSession As Object, layoutName As String) As Boolean
                 vSession.FindByID("wnd[1]/tbar[0]/btn[0]").Press
                 
                 SAP_SelectLayout = True
-                
                 Exit For
             End If
         Next I
     End If
 
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
+
 Exit_Program:
     
     Set o = Nothing
-    
 End Function
 
 'Function switches SAP ID based using SYSTEMID value
@@ -2366,17 +2902,44 @@ Function SwitchSystem(v As Variant) As String
     SwitchSystem = CStr(v)
 End Function
 
+Function SAP_GetSubWindow(ByVal SID As String)
+    Dim I As Long
+    
+    'Default
+    SAP_GetSubWindow = 1
+    
+    I = InStr(SID, "wnd[")
+    If I > 0 Then
+        SID = Mid(SID, I + 4)
+    
+        I = InStr(SID, "]")
+        If I > 0 Then
+            SID = Mid(SID, 1, I - 1)
+            
+            If IsNumeric(SID) Then
+                SAP_GetSubWindow = Val(SID) + 1
+            End If
+        End If
+    End If
+End Function
+
 'Function selects date in date field (in Calendar)
 Function SAP_SelectDate(vSession As Object, ByVal SID As String, ByVal strDate As String) As Boolean
     Dim I As Long
 
-    Dim DD As String
-    Dim MM As String
+    Dim dd As String
+    Dim mm As String
     Dim YYYY As String
+    
+    Dim wSID As String
 
     SAP_SelectDate = False
     
-    DD = "": MM = "": YYYY = ""
+TryAgain:
+
+    On Error GoTo Error_Handler
+    
+    dd = "": mm = "": YYYY = ""
 
     'Convert strDate do YYYYMMDD format
     '"20210802"
@@ -2385,38 +2948,56 @@ Function SAP_SelectDate(vSession As Object, ByVal SID As String, ByVal strDate A
     If strDate Like "*.*.*" Then
         I = InStr(strDate, ".")
         If I > 0 Then
-            DD = Mid(strDate, 1, I - 1)
+            dd = Mid(strDate, 1, I - 1)
             strDate = Mid(strDate, I + 1)
         End If
     
         I = InStr(strDate, ".")
         If I > 0 Then
-            MM = Mid(strDate, 1, I - 1)
+            mm = Mid(strDate, 1, I - 1)
             strDate = Mid(strDate, I + 1)
             
             YYYY = strDate
         End If
         
-        strDate = YYYY & MM & DD
+        strDate = YYYY & mm & dd
     End If
 
-    'MM/DD/YYYY
-    If strDate Like "*/*/*" Then
+    If strDate Like "????/*/*" Then
         I = InStr(strDate, "/")
         If I > 0 Then
-            MM = Mid(strDate, 1, I - 1)
+            YYYY = Mid(strDate, 1, I - 1)
             strDate = Mid(strDate, I + 1)
         End If
     
         I = InStr(strDate, "/")
         If I > 0 Then
-            DD = Mid(strDate, 1, I - 1)
+            mm = Mid(strDate, 1, I - 1)
+            strDate = Mid(strDate, I + 1)
+            
+            dd = strDate
+        End If
+        
+        strDate = YYYY & mm & dd
+    End If
+
+    'MM/DD/YYYY
+    If strDate Like "*/*/????" Then
+        I = InStr(strDate, "/")
+        If I > 0 Then
+            mm = Mid(strDate, 1, I - 1)
+            strDate = Mid(strDate, I + 1)
+        End If
+    
+        I = InStr(strDate, "/")
+        If I > 0 Then
+            dd = Mid(strDate, 1, I - 1)
             strDate = Mid(strDate, I + 1)
             
             YYYY = strDate
         End If
         
-        strDate = YYYY & MM & DD
+        strDate = YYYY & mm & dd
     End If
 
     'Set focus
@@ -2425,14 +3006,22 @@ Function SAP_SelectDate(vSession As Object, ByVal SID As String, ByVal strDate A
     'Possible entries
     vSession.FindByID("wnd[0]").SendVKey 4
 
-    SID = SAP.SAP_GetWindowID(vSession, 1)
+    wSID = SAP.SAP_GetWindowID(vSession, SAP.SAP_GetSubWindow(SID))
 
-    If SID <> "" Then
-        vSession.FindByID("wnd[1]/usr/cntlCONTAINER/shellcont/shell").focusDate = strDate
-        vSession.FindByID("wnd[1]/usr/cntlCONTAINER/shellcont/shell").firstVisibleDate = "DAY_NAME"
-        vSession.FindByID("wnd[1]/tbar[0]/btn[0]").Press
+    If wSID <> "" Then
+        vSession.FindByID(wSID & "/usr/cntlCONTAINER/shellcont/shell").focusDate = strDate
+        vSession.FindByID(wSID & "/usr/cntlCONTAINER/shellcont/shell").firstVisibleDate = "DAY_NAME"
+        vSession.FindByID(wSID & "/tbar[0]/btn[0]").Press
         SAP_SelectDate = True
     End If
+
+Error_Handler:
+    
+    'If we get disconnected when selecting date ... then we have to handle such exception outside of this function ...
+    'User has to completely restart transaction
+    
+    'If SAP_HandleDisconnection(vSession) Then SAP_SelectDate = False
+    'On Error GoTo -1
 End Function
 
 'Function returns SAP ID of active tab for GuiTabStrip
@@ -2441,8 +3030,11 @@ Function SAP_GetActiveTabSID(vSession As Object, SID As String) As String
     Dim o As Object
 
     SAP_GetActiveTabSID = ""
-
     If SID = "" Then Exit Function
+
+TryAgain:
+
+    On Error GoTo Error_Handler
 
     If Trim(vSession.FindByID(SID).Type) <> "GuiTabStrip" Then Exit Function
 
@@ -2450,13 +3042,18 @@ Function SAP_GetActiveTabSID(vSession As Object, SID As String) As String
     For Each o In vSession.FindByID(SID).Children
         'If object has any children - then it is most likely active tab
         'TODO: is this reliable ?
-        If o.Children.length > 0 Then
+        If o.Children.Length > 0 Then
             SAP_GetActiveTabSID = o.ID
             Exit For
         End If
     Next o
 
     Set o = Nothing
+
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
 End Function
 
 'Function selects tab by name in GuiTabStrip
@@ -2465,9 +3062,12 @@ Function SAP_SelectTab(vSession As Object, SID As String, tabName As String) As 
     Dim o As Object
 
     SAP_SelectTab = False
-                
     If SID = "" Then Exit Function
                 
+TryAgain:
+
+    On Error GoTo Error_Handler
+    
     If Trim(vSession.FindByID(SID).Type) <> "GuiTabStrip" Then Exit Function
                 
     'Loop through all tabs
@@ -2483,4 +3083,205 @@ Function SAP_SelectTab(vSession As Object, SID As String, tabName As String) As 
     Next o
     
     Set o = Nothing
+
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
 End Function
+
+'Searches for an object with text searchByText in searchArea
+Function SAP_GetObjectByText(vSession As Object, ByVal searchByText As String, o As Object, Optional searchArea As String = "wnd[0]/usr") As Boolean
+    SAP_GetObjectByText = False
+
+TryAgain:
+
+    On Error GoTo Error_Handler
+    
+    For Each o In vSession.FindByID(searchArea).Children
+        If o.Text = searchByText Then
+            SAP_GetObjectByText = True
+            Exit Function
+        End If
+    Next o
+
+    Set o = Nothing
+
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
+End Function
+
+Function SAP_GetLbl(vSession As Object, vCol As Long, vRow As Long, o As Object, Optional searchArea As String = "wnd[0]/usr") As String
+    Dim I As Long
+    
+    Dim r As String
+    Dim c As String
+    
+    Dim SID As String
+    
+    SAP_GetLbl = False
+    
+TryAgain:
+
+    On Error GoTo Error_Handler
+    
+    'wnd[0]/usr/lbl[133,14]
+    For Each o In vSession.FindByID(searchArea).Children
+        If o.Type = "GuiLabel" Then
+            SID = o.ID
+            
+            I = InStr(SID, "/lbl[")
+            
+            r = 0: c = 0
+            
+            If I > 0 Then
+                SID = Mid(SID, I + Len("/lbl["))
+                
+                I = InStr(SID, ",")
+                If I > 0 Then
+                    c = Mid(SID, 1, I - 1)
+                    
+                    SID = Mid(SID, I + 1)
+                    
+                    I = InStr(SID, "]")
+                    If I > 0 Then
+                        r = Mid(SID, 1, I - 1)
+                        
+                        c = Trim(c)
+                        r = Trim(r)
+                        
+                        If IsNumeric(c) And IsNumeric(r) Then
+                            If Val(c) = vCol And Val(r) = vRow Then
+                                SAP_GetLbl = True
+                                Exit Function
+                            End If
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    Next o
+    
+    Set o = Nothing
+
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
+End Function
+
+Function SAP_GetSIDsByComponentType(vSession As Object, componentType As String, Optional ByVal searchArea As String) As Variant
+    Dim I As Long
+    Dim listSID() As String
+    
+    componentType = UCase(Trim(componentType))
+    
+    ReDim listSID(0): listSID(0) = ""
+
+    If SAP_LoadAllObjects(vSession, searchArea) Then
+        For I = LBound(listAllSID) To UBound(listAllSID)
+            If UCase(Trim(listAllSID(I).typeValue)) = componentType Then
+                If listSID(0) <> "" Then ReDim Preserve listSID(UBound(listSID) + 1)
+                listSID(UBound(listSID)) = listAllSID(I).ID
+            End If
+        Next I
+    End If
+    
+    SAP_GetSIDsByComponentType = listSID
+End Function
+
+Function SAP_GetGUITableColumnIndex_ByName(vSession As Object, SID As String, columnName As String) As Long
+    Dim I As Long
+    Dim o As Object
+    
+    Dim lastSID As String
+        
+    SAP_GetGUITableColumnIndex_ByName = -1
+    
+TryAgain:
+
+    On Error GoTo Error_Handler
+    
+    Set o = vSession.FindByID(SID).GetAbsoluteRow(vSession.FindByID(SID).VerticalScrollbar.Position)
+    
+    If o.Count > 0 Then
+        For I = 0 To o.Count - 1
+            If o(CInt(I)).Name = columnName Then
+                lastSID = o(CInt(I)).ID
+                lastSID = SAP_GetLastSID(lastSID)
+                
+                Set o = Nothing
+                SAP_GetGUITableColumnIndex_ByName = SAP.SAP_GetSIDCol(lastSID)
+                Exit Function
+            End If
+        Next I
+    End If
+    
+    Set o = Nothing
+
+Error_Handler:
+    
+    If SAP_HandleDisconnection(vSession) Then GoTo TryAgain
+    On Error GoTo -1
+End Function
+
+'GuiTableControl sucks
+Function SAP_GUITableHasRows(vSession As Object, SID As String) As Boolean
+    Dim o As Object
+        
+    SAP_GUITableHasRows = False
+    
+    Set o = vSession.FindByID(SID).GetAbsoluteRow(vSession.FindByID(SID).VerticalScrollbar.Position)
+    
+    If o.Count > 0 Then
+        SAP_GUITableHasRows = True
+    End If
+    
+    Set o = Nothing
+End Function
+
+Function SAP_GuiComboBox_GetKey(vSession As Object, SID As String, searchValue As String) As String
+    Dim e As Object
+    
+    SAP_GuiComboBox_GetKey = ""
+    
+    For Each e In vSession.FindByID(SID).Entries
+        If e.Value = searchValue Or e.key = searchValue Then
+            SAP_GuiComboBox_GetKey = e.key
+            Exit Function
+        End If
+    Next e
+End Function
+
+Function SAP_GuiComboBox_SelectValue(vSession As Object, SID As String, searchValue As String) As Boolean
+    Dim key As String
+    
+    SAP_GuiComboBox_SelectValue = False
+    
+    key = SAP_GuiComboBox_GetKey(vSession, SID, searchValue)
+    
+    If key <> "" Then
+        vSession.FindByID(SID).key = key
+        
+        SAP_GuiComboBox_SelectValue = True
+    End If
+End Function
+
+'Template sub
+Private Sub SubTemplate()
+    Application.DisplayAlerts = False
+    
+    SAP.SAP_Init session
+    SAP.SAP_SetFilePathSaveAs
+    
+    If SAP.SAP_Activated(session) = False Then GoTo Exit_Program
+    
+Exit_Program:
+
+    SAP.SAP_Destroy session
+
+    Application.DisplayAlerts = True
+End Sub
+
