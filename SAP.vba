@@ -3221,26 +3221,43 @@ End Function
 Function SAP_SelectTab(vSession As Object, SID As String, tabName As String) As Boolean
     Dim o As Object
 
+    Dim tSID As String
+    Dim tFound As Boolean
+
     SAP_SelectTab = False
     If SID = "" Then Exit Function
                 
 TryAgain:
 
     On Error GoTo Error_Handler
-    
+
+    SID = SAP_AutoCorrectSID(vSession, SID)
+
     If Trim(vSession.FindByID(SID).Type) <> "GuiTabStrip" Then Exit Function
                 
-    'Loop through all tabs
-    For Each o In vSession.FindByID(SID).Children
-        'Check tab name
-        If o.Text = tabName Then
-            'Select tab
-            o.Select
-            
-            SAP_SelectTab = True
-            Exit For
-        End If
-    Next o
+    Do
+        tFound = False
+
+        'Loop through all tabs
+        For Each o In vSession.FindByID(SID).Children
+            'Check tab name
+            If o.Text = tabName Then
+                tFound = True
+                
+                'Select tab
+                o.Select
+                Set o = Nothing
+                
+                Exit For
+            End If
+        Next o
+        
+        SID = SAP_AutoCorrectSID(vSession, SID)
+        
+        tSID = SAP.SAP_GetActiveTabSID(vSession, SID)
+    Loop While tFound And vSession.FindByID(tSID).Text <> tabName
+    
+    SAP_SelectTab = vSession.FindByID(tSID).Text = tabName
     
     Set o = Nothing
 
