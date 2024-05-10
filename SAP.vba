@@ -1752,7 +1752,8 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
                 'GuiCustomControl
                 If o.Type = "GuiCustomControl" Then
                     SID = o.ID & "/shellcont/shell"
-                    flagCustomControl = True
+                    'TODO: why did we use this method?
+                    'flagCustomControl = True
                 End If
                 
 '                If UCase(SAP_GetSID(o.ID, "cntlCUST_CONTRL")) = UCase("cntlCUST_CONTRL") Then
@@ -1801,58 +1802,72 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
     'Specify format
     If exporting Then
         exporting = False
-        
-        'In case of Custom Control format Radio buttons are children of wnd[1]/usr
-        'In case of Local file (XLS) / Unconverted (TXT) format radio buttons are children of wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150
-        
-        'Find out which object ID is valid (we don't really need to use this function, but we can :))
-        SID = SAP_GetValidObjectID(vSession, Array("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150", "wnd[1]/usr"), "wnd[1]/usr")
-        
+
+        'First check for Window path (if user ticked Always Use Selected Format then options won't be available anymore)
+        SID = SAP_GetValidObjectID(vSession, Array("wnd[1]/usr/ctxtDY_PATH"))
+
         If SID <> "" Then
-            'Handle XLSX format in Custom Control
-            If vSession.FindByID("wnd[1]").Text = "Select Spreadsheet" Then
-                If SAP_GetValidObjectID(vSession, "wnd[1]/usr/cmbG_LISTBOX") <> "" Then
-                    vSession.FindByID("wnd[1]/usr/radRB_OTHERS").Selected = True
-                    
-                    exporting = False
-                    
-                    'Select XLSX
-                    If SAP_GuiComboBox_SelectValue(vSession, "wnd[1]/usr/cmbG_LISTBOX", "Excel - Office Open XML Format (XLSX)") Then
-                        exporting = True
+            exporting = True
+        Else
+    
+            'In case of Custom Control format Radio buttons are children of wnd[1]/usr
+            'In case of Local file (XLS) / Unconverted (TXT) format radio buttons are children of wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150
+            
+            'Find out which object ID is valid (we don't really need to use this function, but we can :))
+            SID = SAP_GetValidObjectID(vSession, Array("wnd[1]/usr/subSUBSCREEN_STEPLOOP:SAPLSPO5:0150/sub:SAPLSPO5:0150", "wnd[1]/usr"), "wnd[1]/usr")
+            
+            If SID <> "" Then
+                'Handle XLSX format in Custom Control
+                If vSession.FindByID("wnd[1]").Text = "Select Spreadsheet" Then
+                    If SAP_GetValidObjectID(vSession, "wnd[1]/usr/cmbG_LISTBOX") <> "" Then
+                        vSession.FindByID("wnd[1]/usr/radRB_OTHERS").Selected = True
+                        
+                        exporting = False
+                        
+						'TODO: add reliable XLSX selection method
+                        'Select XLSX
+                        If SAP_GuiComboBox_SelectValue(vSession, "wnd[1]/usr/cmbG_LISTBOX", "Excel - Office Open XML Format (XLSX)") = False Then
+                            'Bruh ... seems like there is a typo in Fusion instead of XLSX they typed in XSLX ...
+                            If SAP_GuiComboBox_SelectValue(vSession, "wnd[1]/usr/cmbG_LISTBOX", "Excel (in Office 2007 XSLX Format)") Then
+                                exporting = True
+                            End If
+                        Else
+                            exporting = True
+                        End If
+                        
+                        fileFormat = fileFormat_XLSX
                     End If
-                    
-                    fileFormat = fileFormat_XLSX
                 End If
-            End If
-            
-            If exporting = False Then
-                For Each o In vSession.FindByID(SID).Children
-                    If fileFormat = fileFormat_Unconverted Then
-                        If UCase(Trim(o.Text)) = "UNCONVERTED" Then
-                            o.Select
-                            Set o = Nothing
-                            
-                            exporting = True
-                            Exit For
+                
+                If exporting = False Then
+                    For Each o In vSession.FindByID(SID).Children
+                        If fileFormat = fileFormat_Unconverted Then
+                            If UCase(Trim(o.Text)) = "UNCONVERTED" Then
+                                o.Select
+                                Set o = Nothing
+                                
+                                exporting = True
+                                Exit For
+                            End If
+                        Else
+                            If stringIsInArray(UCase(Trim(o.Text)), Array("SPREADSHEET", "TEXT WITH TABS", "EXCEL (IN MHTML FORMAT)")) Then
+                                o.Select
+                                Set o = Nothing
+                                
+                                exporting = True
+                                Exit For
+                            End If
                         End If
-                    Else
-                        If stringIsInArray(UCase(Trim(o.Text)), Array("SPREADSHEET", "TEXT WITH TABS", "EXCEL (IN MHTML FORMAT)")) Then
-                            o.Select
-                            Set o = Nothing
-                            
-                            exporting = True
-                            Exit For
-                        End If
-                    End If
-                Next o
+                    Next o
+                End If
+                
+                If exporting = True Then
+                    'Ok, Continue
+                    vSession.FindByID("wnd[1]/tbar[0]/btn[0]").Press
+                End If
+                
+                Set o = Nothing
             End If
-            
-            If exporting = True Then
-                'Ok, Continue
-                vSession.FindByID("wnd[1]/tbar[0]/btn[0]").Press
-            End If
-            
-            Set o = Nothing
         End If
     End If
 
@@ -1912,7 +1927,6 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
             If SAP_FormatUnconvertedFile(filePath & fileName, filePath & "$TEMP.FORMAT.UNCONVERTED." & fileName) Then
                 'File extension has to be TXT !? Stupid excel ...
                 Workbooks.OpenText fileName:=filePath & "$TEMP.FORMAT.UNCONVERTED." & fileName, Origin:=437, StartRow:=1, DataType:=xlDelimited, TextQualifier:=xlDoubleQuote, ConsecutiveDelimiter:=False, Tab:=False, Semicolon:=False, Comma:=False, Space:=False, Other:=True, OtherChar:="|", TrailingMinusNumbers:=True, FieldInfo:=listFieldInfo
-                
                 Erase listFieldInfo
                 
                 'TODO: is this reliable ?
@@ -1944,7 +1958,7 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
             Do
                 'DoEvents should allow SAP to open exported file in active Excel instance
                 DoEvents
-                Application.Wait Now + TimeValue("00:00:01")
+                'Application.Wait Now + TimeValue("00:00:01")
                 
                 'Was workbook opened in this Excel instance ?
                 For Each WB In Application.Workbooks
