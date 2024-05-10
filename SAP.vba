@@ -46,6 +46,11 @@ Private Type T_SAP_Client
     userName As String
 End Type
 
+Private Type T_CachedDate
+    inputDate As String
+    outputDate As String
+End Type
+
 Public SAPRot As Object
 Public SAPGUIAuto As Object
 Public SAPApp As Object
@@ -115,6 +120,8 @@ Public SAPSystemID As Long
 
 '
 Private listFieldInfo() As Variant
+
+Private listCachedDates() As T_CachedDate
 
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 '   SOME INTERNAL FUNCTIONS
@@ -425,7 +432,7 @@ End Function
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 '   Releases all objects from memory used by this module
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Sub SAP_Destroy(vSession As Object)
+Sub SAP_Destroy(vSession As Object, Optional reInit As Boolean = False)
     Set vSession = Nothing
     
     'Global SAP variables
@@ -435,6 +442,10 @@ Sub SAP_Destroy(vSession As Object)
     Set SAPConnection = Nothing
     
     passportTransactionID = ""
+    
+    If reInit = False Then
+        Erase listCachedDates
+    End If
     
     Erase listAllSID
 End Sub
@@ -674,10 +685,13 @@ Sub SAP_Init(vSession As Object, Optional systemName As String = "", Optional se
     Dim sessionCreated As Boolean
     
 '--
+    ReDim listCachedDates(0)
+    listCachedDates(0).inputDate = ""
+    listCachedDates(0).outputDate = ""
 
 TryAgain_Disconnected:
 
-    SAP_Destroy vSession
+    SAP_Destroy vSession, reInit:=True
     
     'export time out 1 hour in case of MHTML files
     exportTimeOut = 3600
@@ -2984,7 +2998,7 @@ Function SAP_SelectDate(vSession As Object, ByVal SID As String, ByVal strDate A
 
     Dim dd As String
     Dim mm As String
-    Dim YYYY As String
+    Dim yyyy As String
     
     Dim wSID As String
 
@@ -2994,7 +3008,7 @@ TryAgain:
 
     On Error GoTo Error_Handler
     
-    dd = "": mm = "": YYYY = ""
+    dd = "": mm = "": yyyy = ""
 
     'Convert strDate do YYYYMMDD format
     '"20210802"
@@ -3012,16 +3026,16 @@ TryAgain:
             mm = Mid(strDate, 1, I - 1)
             strDate = Mid(strDate, I + 1)
             
-            YYYY = strDate
+            yyyy = strDate
         End If
         
-        strDate = YYYY & mm & dd
+        strDate = yyyy & Format(mm, "00") & Format(dd, "00")
     End If
 
     If strDate Like "????/*/*" Then
         I = InStr(strDate, "/")
         If I > 0 Then
-            YYYY = Mid(strDate, 1, I - 1)
+            yyyy = Mid(strDate, 1, I - 1)
             strDate = Mid(strDate, I + 1)
         End If
     
@@ -3033,7 +3047,7 @@ TryAgain:
             dd = strDate
         End If
         
-        strDate = YYYY & mm & dd
+        strDate = yyyy & Format(mm, "00") & Format(dd, "00")
     End If
 
     'MM/DD/YYYY
@@ -3049,24 +3063,53 @@ TryAgain:
             dd = Mid(strDate, 1, I - 1)
             strDate = Mid(strDate, I + 1)
             
-            YYYY = strDate
+            yyyy = strDate
         End If
         
-        strDate = YYYY & mm & dd
+        strDate = yyyy & Format(mm, "00") & Format(dd, "00")
     End If
-
-    'Set focus
-    vSession.FindByID(SID).SetFocus
     
-    'Possible entries
-    vSession.FindByID("wnd[0]").SendVKey 4
-
-    wSID = SAP.SAP_GetWindowID(vSession, SAP.SAP_GetSubWindow(SID))
-
-    If wSID <> "" Then
-        vSession.FindByID(wSID & "/usr/cntlCONTAINER/shellcont/shell").focusDate = strDate
-        vSession.FindByID(wSID & "/usr/cntlCONTAINER/shellcont/shell").firstVisibleDate = "DAY_NAME"
-        vSession.FindByID(wSID & "/tbar[0]/btn[0]").Press
+    Dim flagUnique As Boolean
+    
+    flagUnique = True
+    
+    For I = LBound(listCachedDates) To UBound(listCachedDates)
+        If strDate = listCachedDates(I).inputDate Then
+            strDate = listCachedDates(I).outputDate
+            flagUnique = False
+            Exit For
+        End If
+    Next I
+    
+    'If this date was not yet cached - select it via calendar
+    'In case of non-changeable fields we have to use Possible entries option
+    If flagUnique Or vSession.FindByID(SID).changeAble = False Then
+        'Set focus
+        vSession.FindByID(SID).SetFocus
+        
+        'Possible entries
+        vSession.FindByID("wnd[0]").sendVKey 4
+    
+        wSID = SAP.SAP_GetWindowID(vSession, SAP.SAP_GetSubWindow(SID))
+    
+        If wSID <> "" Then
+            vSession.FindByID(wSID & "/usr/cntlCONTAINER/shellcont/shell").focusDate = strDate
+            vSession.FindByID(wSID & "/usr/cntlCONTAINER/shellcont/shell").firstVisibleDate = "DAY_NAME"
+            vSession.FindByID(wSID & "/tbar[0]/btn[0]").Press
+            SAP_SelectDate = True
+        End If
+        
+        If vSession.FindByID(SID).changeAble Then
+            If listCachedDates(0).inputDate <> "" Then
+                ReDim Preserve listCachedDates(UBound(listCachedDates) + 1)
+            End If
+            
+            listCachedDates(UBound(listCachedDates)).inputDate = strDate
+            listCachedDates(UBound(listCachedDates)).outputDate = vSession.FindByID(SID).Text
+        End If
+    Else
+        'If date was cached already - use cached one
+        vSession.FindByID(SID).Text = strDate
         SAP_SelectDate = True
     End If
 
