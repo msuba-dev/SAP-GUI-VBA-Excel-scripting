@@ -2311,8 +2311,9 @@ TryAgain:
         'Execute query
         vSession.FindByID("wnd[0]/tbar[1]/btn[8]").Press
 
-        sbar = vSession.FindByID("wnd[0]/sbar").Text
-        If sbar <> "" Then queryExecuted = False
+        'Ignore statusbar texts after query execution - this has to be handled outside of this module
+        'sbar = vSession.FindByID("wnd[0]/sbar").Text
+        'If sbar <> "" Then queryExecuted = False
     End If
 
 Error_Handler:
@@ -2324,7 +2325,7 @@ Exit_Program:
 
     SAP_StartSQ_Wrapper = queryExecuted
 
-    If sbar <> "" Then MsgBox sbar, vbCritical, "SAP Start " & tCode
+    'If sbar <> "" Then MsgBox sbar, vbCritical, "SAP Start " & tCode
 
     Set o = Nothing
 End Function
