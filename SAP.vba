@@ -2061,7 +2061,7 @@ Function SAP_ExportToExcelAndOpen(vSession As Object, ByVal fileName As String, 
     'Export
     If SAP_ExportToExcel(vSession, fileName, filePath, True) Then
         'Open
-        'Workbooks.Open (filePath & fileName)
+        Workbooks.Open (filePath & fileName)
     
         'Check if opened ...
         If ActiveWorkbook.Name = fileName Then SAP_ExportToExcelAndOpen = True
