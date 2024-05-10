@@ -3166,18 +3166,11 @@ TryAgain:
     On Error GoTo Error_Handler
 
     If Trim(vSession.FindByID(SID).Type) <> "GuiTabStrip" Then Exit Function
-
-    'Loop through all tabs
-    For Each o In vSession.FindByID(SID).Children
-        'If object has any children - then it is most likely active tab
-        'TODO: is this reliable ?
-        If o.Children.Length > 0 Then
-            SAP_GetActiveTabSID = o.ID
-            Exit For
-        End If
-    Next o
-
-    Set o = Nothing
+    
+    While vSession.Busy
+    Wend
+    
+    SAP_GetActiveTabSID = vSession.FindByID(SID).SelectedTab.ID
 
 Error_Handler:
     
