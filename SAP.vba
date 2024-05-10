@@ -3318,47 +3318,16 @@ Function SAP_GetLbl(vSession As Object, vCol As Long, vRow As Long, o As Object,
     Dim SID As String
     
     SAP_GetLbl = False
-    
-TryAgain:
 
+TryAgain:
     On Error GoTo Error_Handler
-    
-    'wnd[0]/usr/lbl[133,14]
-    For Each o In vSession.FindByID(searchArea).Children
-        If o.Type = "GuiLabel" Then
-            SID = o.ID
-            
-            I = InStr(SID, "/lbl[")
-            
-            r = 0: c = 0
-            
-            If I > 0 Then
-                SID = Mid(SID, I + Len("/lbl["))
-                
-                I = InStr(SID, ",")
-                If I > 0 Then
-                    c = Mid(SID, 1, I - 1)
-                    
-                    SID = Mid(SID, I + 1)
-                    
-                    I = InStr(SID, "]")
-                    If I > 0 Then
-                        r = Mid(SID, 1, I - 1)
-                        
-                        c = Trim(c)
-                        r = Trim(r)
-                        
-                        If IsNumeric(c) And IsNumeric(r) Then
-                            If Val(c) = vCol And Val(r) = vRow Then
-                                SAP_GetLbl = True
-                                Exit Function
-                            End If
-                        End If
-                    End If
-                End If
-            End If
-        End If
-    Next o
+
+    'Fast method to check if object ID exists
+    Set o = vSession.FindByID(searchArea & "/lbl[" & vCol & "," & vRow & "]", False)
+    If Not (o Is Nothing) Then
+        SAP_GetLbl = True
+        Exit Function
+    End If
     
     Set o = Nothing
 
