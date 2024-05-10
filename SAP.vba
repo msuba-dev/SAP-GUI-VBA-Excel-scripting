@@ -1512,7 +1512,7 @@ RestartLoop:
                             If noOfColumns = lastNoOfColumns Then
                                 flagWrite = True
                             Else
-                                break
+                                MsgBox "break"
                             End If
                         End If
                             
