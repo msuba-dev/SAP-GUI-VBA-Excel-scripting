@@ -1047,10 +1047,13 @@ End Sub
 '   Function should allow better error handling - specifically with SAP disconnection issues
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Function SAP_HandleDisconnection(vSession As Object) As Boolean
+    Dim wSID As String
+
     SAP_HandleDisconnection = False
     
     If Err.Number = 0 Then Exit Function
     
+    'yeah sap has a typo here ...
     'Automation error The server threw an expection (occurs ususally when connection drops)
     If Err.Number = error_SAP_AutomationError Then
         Err.Clear
@@ -1083,6 +1086,17 @@ Function SAP_HandleDisconnection(vSession As Object) As Boolean
 
     'Control could not be found by id. (occurs when SAP is disconnected)
     If Err.Number = error_SAP_ControlNotFoundByID Then
+        'Handle Express Information window - close that sh*t
+        wSID = SAP.SAP_GetWindowID(vSession, 1)
+        If wSID <> "" Then
+            If vSession.FindByID(wSID).Text = "Express Information" Then
+                vSession.FindByID(wSID).Close
+                Err.Clear
+                SAP_HandleDisconnection = True
+                GoTo Exit_Function
+            End If
+        End If
+    
         Err.Clear
         Application.StatusBar = "SAP error: Control could not be found by ID. (occurs ususally when SAP disconnects)"
     
@@ -1096,7 +1110,6 @@ Function SAP_HandleDisconnection(vSession As Object) As Boolean
         Err.Clear
         Application.StatusBar = "SAP error: session was disconnected."
 
-        SAP_Init vSession, SAPSystemName
         Dim lastHwnd As Long
         lastHwnd = SAPHwnd
 
@@ -1117,9 +1130,13 @@ Function SAP_HandleDisconnection(vSession As Object) As Boolean
         'TODO: testing error handling - remove afterwards
         MsgBox "Well ... something went wrong :)" & Chr(10) & Err.Number & " " & Chr(10) & Err.Description
     End If
+
+Exit_Function:
+
+    'Clear status bar message
+    Application.StatusBar = False
     
     'Safety check (allows Ctrl + PauseBreak to interrupt code execution in case of infinite loop)
-    Application.StatusBar = False
     DoEvents
 End Function
 
