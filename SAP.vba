@@ -3178,6 +3178,44 @@ Error_Handler:
     On Error GoTo -1
 End Function
 
+'Auto-correction for ME22/ME23 root ID
+'SAP you're killing me!
+Function SAP_AutoCorrectSID(vSession As Object, ByVal SID As String) As String
+    Dim I As Long
+    Dim lSID As String
+    
+    Dim o As Object
+    
+    If InStr(SID, "wnd[0]/usr/subSUB0:SAPLMEGUI") > 0 Then
+        
+        lSID = SID
+        
+        'Loop through all children - identify correct root id
+        For Each o In vSession.FindByID("wnd[0]/usr").Children
+            If InStr(o.ID, "wnd[0]/usr/subSUB0:SAPLMEGUI") > 0 Then
+                SID = o.ID
+                Exit For
+            End If
+        Next o
+        
+        I = InStr(lSID, "wnd[0]/usr/subSUB0:SAPLMEGUI")
+        If I > 0 Then
+            lSID = Mid(lSID, I + Len("wnd[0]/usr/subSUB0:SAPLMEGUI"))
+            
+            I = InStr(lSID, "/")
+            If I > 0 Then
+                lSID = Mid(lSID, I)
+                
+                SID = SID & lSID
+            End If
+        End If
+    End If
+
+    SAP_AutoCorrectSID = SID
+
+    Set o = Nothing
+End Function
+
 'Function selects tab by name in GuiTabStrip
 'Input SID - SID of GuiTabStrip object
 Function SAP_SelectTab(vSession As Object, SID As String, tabName As String) As Boolean
