@@ -3268,7 +3268,24 @@ Error_Handler:
 End Function
 
 'Searches for an object with text searchByText in searchArea
-Function SAP_GetObjectByText(vSession As Object, ByVal searchByText As String, o As Object, Optional searchArea As String = "wnd[0]/usr") As Boolean
+Function SAP_GetObjectByText(vSession As Object, ByVal v As Variant, o As Object, Optional searchArea As String = "wnd[0]/usr") As Boolean
+    Dim I As Long
+    Dim searchValues() As String
+    
+    ReDim searchValues(0): searchValues(0) = ""
+    
+    If IsArray(v) Then
+        For I = LBound(v) To UBound(v)
+            If searchValues(0) <> "" Then
+                ReDim Preserve searchValues(UBound(searchValues) + 1)
+            End If
+            
+            searchValues(UBound(searchValues)) = CStr(v(I))
+        Next I
+    Else
+        searchValues(0) = CStr(v)
+    End If
+    
     SAP_GetObjectByText = False
 
 TryAgain:
@@ -3276,10 +3293,12 @@ TryAgain:
     On Error GoTo Error_Handler
     
     For Each o In vSession.FindByID(searchArea).Children
-        If o.Text = searchByText Then
-            SAP_GetObjectByText = True
-            Exit Function
-        End If
+        For I = LBound(searchValues) To UBound(searchValues)
+            If o.Text = searchValues(I) Then
+                SAP_GetObjectByText = True
+                Exit Function
+            End If
+        Next I
     Next o
 
     Set o = Nothing
