@@ -1050,7 +1050,6 @@ Function SAP_HandleDisconnection(vSession As Object) As Boolean
     Dim wSID As String
 
     SAP_HandleDisconnection = False
-    
     If Err.Number = 0 Then Exit Function
     
     'yeah sap has a typo here ...
@@ -1648,7 +1647,7 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
     
     Dim fileExtension As String
     
-    Dim WB As Workbook
+    Dim wb As Workbook
     Dim backupIgnoreRemoteRequests As Boolean
     
     Dim newWorkbook As Boolean
@@ -1660,11 +1659,11 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
     
     ReDim listOpenedWorkbooks(0): listOpenedWorkbooks(0) = ""
     
-    For Each WB In Application.Workbooks
+    For Each wb In Application.Workbooks
         If listOpenedWorkbooks(0) <> "" Then ReDim Preserve listOpenedWorkbooks(UBound(listOpenedWorkbooks) + 1)
         
-        listOpenedWorkbooks(UBound(listOpenedWorkbooks)) = WB.Path & "\" & WB.Name
-    Next WB
+        listOpenedWorkbooks(UBound(listOpenedWorkbooks)) = wb.Path & "\" & wb.Name
+    Next wb
     
     backupIgnoreRemoteRequests = Application.IgnoreRemoteRequests
     
@@ -1930,11 +1929,11 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
                 Erase listFieldInfo
                 
                 'TODO: is this reliable ?
-                Set WB = ActiveWorkbook
+                Set wb = ActiveWorkbook
                 
                 'Change Sheet name by default to Sheet1
-                WB.ActiveSheet.Name = "Sheet1"
-                WB.SaveAs filePath & ChangeExtension(fileName, "XLSX"), fileFormat:=xlOpenXMLWorkbook
+                wb.ActiveSheet.Name = "Sheet1"
+                wb.SaveAs filePath & ChangeExtension(fileName, "XLSX"), fileFormat:=xlOpenXMLWorkbook
                 
                 'Delete temporary file
                 FSO_DeleteFile filePath & "$TEMP.FORMAT.UNCONVERTED." & fileName
@@ -1943,7 +1942,7 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
                 fileName = ChangeExtension(fileName, "XLSX")
                 
                 'Close Workbook if we don't want to open it
-                If keepOpened = False Then WB.Close
+                If keepOpened = False Then wb.Close
             End If
         End If
         
@@ -1961,30 +1960,30 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
                 'Application.Wait Now + TimeValue("00:00:01")
                 
                 'Was workbook opened in this Excel instance ?
-                For Each WB In Application.Workbooks
-                    If WB.Path & "\" & WB.Name = filePath & fileName Then
+                For Each wb In Application.Workbooks
+                    If wb.Path & "\" & wb.Name = filePath & fileName Then
                         'Close Workbook if we don't want to open it
-                        If keepOpened = False Then WB.Close
+                        If keepOpened = False Then wb.Close
                         Exit Do
                     End If
-                Next WB
+                Next wb
                 
                 'In case of some GUIs we are not able to Save it automatically ... and only user can save file
                 'That's why we have to check whether there was meanwhile opened new workbook (we cannot rely on user to save file to intended 'filePath' with 'fileName'
                 If listOpenedWorkbooks(0) <> "" Then
-                    For Each WB In Application.Workbooks
+                    For Each wb In Application.Workbooks
                         
                         newWorkbook = True
                         
                         For I = LBound(listOpenedWorkbooks) To UBound(listOpenedWorkbooks)
-                            If listOpenedWorkbooks(I) = WB.Path & "\" & WB.Name Then
+                            If listOpenedWorkbooks(I) = wb.Path & "\" & wb.Name Then
                                 newWorkbook = False
                                 Exit For
                             End If
                         Next I
                         
                         If newWorkbook = True Then Exit Do
-                    Next WB
+                    Next wb
                 End If
                 
                 loopCounter = loopCounter + 1
@@ -2039,7 +2038,7 @@ Error_Handler:
 
 Exit_Program:
 
-    Set WB = Nothing
+    Set wb = Nothing
 
     Erase listOpenedWorkbooks
 
@@ -2048,7 +2047,7 @@ Exit_Program:
     SAP_ExportToExcel = exporting
 
     'Release objects from memory
-    Set WB = Nothing
+    Set wb = Nothing
     Set o = Nothing
 End Function
 
@@ -2542,7 +2541,7 @@ TryAgain:
 
     On Error GoTo Error_Handler
         
-    If rowNumber = (vSession.FindByID(tableSID).VerticalScrollbar.Position + vSession.FindByID(tableSID).VerticalScrollbar.PageSize) Then
+    If rowNumber = (vSession.FindByID(tableSID).VerticalScrollBar.Position + vSession.FindByID(tableSID).VerticalScrollBar.PageSize) Then
         SAP_TableVScrollBarReadyToScroll = True
     End If
 
@@ -3370,7 +3369,7 @@ TryAgain:
 
     On Error GoTo Error_Handler
     
-    Set o = vSession.FindByID(SID).GetAbsoluteRow(vSession.FindByID(SID).VerticalScrollbar.Position)
+    Set o = vSession.FindByID(SID).GetAbsoluteRow(vSession.FindByID(SID).VerticalScrollBar.Position)
     
     If o.Count > 0 Then
         For I = 0 To o.Count - 1
@@ -3399,7 +3398,7 @@ Function SAP_GUITableHasRows(vSession As Object, SID As String) As Boolean
         
     SAP_GUITableHasRows = False
     
-    Set o = vSession.FindByID(SID).GetAbsoluteRow(vSession.FindByID(SID).VerticalScrollbar.Position)
+    Set o = vSession.FindByID(SID).GetAbsoluteRow(vSession.FindByID(SID).VerticalScrollBar.Position)
     
     If o.Count > 0 Then
         SAP_GUITableHasRows = True
