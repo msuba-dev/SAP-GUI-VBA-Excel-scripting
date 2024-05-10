@@ -51,6 +51,7 @@ Public SAPGUIAuto As Object
 Public SAPApp As Object
 Public SAPConnection As Object
 Public SAPSystemName As String
+Public SAPHwnd As Long
 
 Public filePathSaveAs As String
 Public sessionWasLoggedByMacro As Boolean
@@ -647,7 +648,7 @@ End Sub
 '   by specifying sessionNo you can connect to specific session
 '   by default function will try to connect to empty session (with SESSION_MANAGER)
 '---------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Sub SAP_Init(vSession As Object, Optional systemName As String = "", Optional sessionNo As Long = -1, Optional selectEmptySession As Boolean = True)
+Sub SAP_Init(vSession As Object, Optional systemName As String = "", Optional sessionNo As Long = -1, Optional selectEmptySession As Boolean = True, Optional selectHwnd As Long = 0)
     Dim I As Long
     Dim J As Long
 
@@ -658,7 +659,7 @@ Sub SAP_Init(vSession As Object, Optional systemName As String = "", Optional se
     
     Dim sessionsCount As Long
     
-    Dim hndw As String
+    Dim hwnd As String
     Dim flagNewHandle As Boolean
     
     Dim listHandles() As String
@@ -844,6 +845,11 @@ New_Connection_Opened:
     End If
 
     'Check if session is busy - increase session number if it is
+    Dim handleFound As Boolean
+    handleFound = False
+
+SearchForValidSession:
+
     If sessionNo <= sessionsCount Then
         For I = 1 To sessionsCount
             'Keep track of currently opened session window handles
@@ -856,14 +862,29 @@ New_Connection_Opened:
                 If SAPConnection.Children(CInt(I - 1)).Busy Then
                     sessionNo = sessionNo + 1
                 Else
-                    If selectEmptySession Then
-                        If SAPConnection.Children(CInt(I - 1)).Info.Transaction <> "SESSION_MANAGER" Then
-                            sessionNo = sessionNo + 1
+                    If selectHwnd <> 0 Then
+                        If selectHwnd = SAPConnection.Children(CInt(I - 1)).ActiveWindow.Handle Then
+                            handleFound = True
+                            sessionNo = I
+                            Exit For
+                        End If
+                    Else
+                        If selectEmptySession Then
+                            If SAPConnection.Children(CInt(I - 1)).Info.Transaction <> "SESSION_MANAGER" Then
+                                sessionNo = sessionNo + 1
+                            End If
                         End If
                     End If
                 End If
             End If
         Next I
+    End If
+    
+    If selectHwnd <> 0 Then
+        If handleFound = False Then
+            selectHwnd = 0
+            GoTo SearchForValidSession
+        End If
     End If
     
     'Create New Session if needed
@@ -885,7 +906,7 @@ New_Connection_Opened:
                         isBusy = False
                         sessionCreated = True
                         
-                        'List of Children changes when new session is created - list is sorted by hndw!
+                        'List of Children changes when new session is created - list is sorted by hwnd!
                         vSession.CreateSession
                         
                         While vSession.Busy
@@ -929,20 +950,23 @@ New_Connection_Opened:
                     flagNewHandle = True
                     
                     'Get window handle
-                    hndw = SAPConnection.Children(CInt(I - 1)).ActiveWindow.Handle
+                    hwnd = SAPConnection.Children(CInt(I - 1)).ActiveWindow.Handle
                     
                     'Check which session window is new
                     For J = LBound(listHandles) To UBound(listHandles)
-                        If listHandles(J) = hndw Then
+                        If listHandles(J) = hwnd Then
                             flagNewHandle = False
                             Exit For
                         End If
                     Next J
                     
                     If flagNewHandle Then
-                        sessionNo = I
-                        Set vSession = SAPConnection.Children(CInt(I - 1))
-                        Exit For
+                        'We have to check also tcode ... newly opened session should have opened by default SESSION_MANAGER
+                        If SAPConnection.Children(CInt(I - 1)).Info.Transaction = "SESSION_MANAGER" Then
+                            sessionNo = I
+                            Set vSession = SAPConnection.Children(CInt(I - 1))
+                            Exit For
+                        End If
                     End If
                 End If
             Next I
@@ -1059,6 +1083,15 @@ Function SAP_HandleDisconnection(vSession As Object) As Boolean
         Application.StatusBar = "SAP error: session was disconnected."
 
         SAP_Init vSession, SAPSystemName
+        Dim lastHwnd As Long
+        lastHwnd = SAPHwnd
+
+        SAP_Init vSession, systemName:=SAPSystemName, selectHwnd:=SAPHwnd
+                
+        If lastHwnd = SAPHwnd Then
+            MsgBox "TODO: Session and SAP API object disconnected. You should investigate how this happened.", vbCritical, "SAP Handle Disconnection"
+        End If
+        
         SAP_HandleDisconnection = True
     End If
 
@@ -1110,6 +1143,7 @@ Error_Handler:
     On Error GoTo -1
     
     If Not (vSession Is Nothing) Then
+        SAPHwnd = vSession.ActiveWindow.Handle
         SAP_Activated = True
     End If
 End Function
@@ -1925,7 +1959,28 @@ Function SAP_ExportToExcel(vSession As Object, ByVal fileName As String, Optiona
         End If
     End If
 
+    'Dummy tcode read - this will raise an error if session disconnected
+    Dim tCode As String
+    tCode = vSession.Info.Transaction
+
 Error_Handler:
+
+    Dim lastHwnd As Long
+    lastHwnd = SAPHwnd
+
+    '2024-04-25
+    'Seems like new issue with SAP - session **sometimes** disconnects after data export? try to reconnect by handle
+    'Disconnected - try to log back in
+    If Err.Number = error_SAP_Disconnected Then
+        Application.StatusBar = "SAP error: session was disconnected."
+
+        'selectHwnd has higher prio than selectEmptySession (thus its redundant, but wont harm)
+        SAP_Init vSession, systemName:=SAPSystemName, selectEmptySession:=False, selectHwnd:=SAPHwnd
+                
+        If lastHwnd = SAPHwnd Then
+            Err.Clear
+        End If
+    End If
 
     If Err.Number <> 0 Then
         exporting = False
